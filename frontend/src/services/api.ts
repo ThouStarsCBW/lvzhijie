@@ -1,0 +1,209 @@
+import type {
+  ActivityEvent,
+  AgentArchitecture,
+  CaseItem,
+  CaseMemory,
+  CaseTask,
+  FollowUpQuestion,
+  LegalAgent,
+  LegalDocument,
+  LegalDocumentDiff,
+  LegalDocumentRevision,
+  LegalReplyJob,
+  LegalReasoningRun,
+  OpenClawConnection,
+  OpenClawStatus,
+  WechatConversation,
+  WechatMessage,
+} from "@/types";
+
+const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const isFormData = options?.body instanceof FormData;
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: isFormData
+      ? options?.headers
+      : { "Content-Type": "application/json", ...options?.headers },
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Request failed: ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+export const api = {
+  summary: () => request<Record<string, unknown>>("/api/dashboard/summary"),
+  activity: () => request<ActivityEvent[]>("/api/activity"),
+
+  openclawConnection: () => request<OpenClawConnection>("/api/openclaw/connection"),
+  updateOpenclawConnection: (payload: OpenClawConnection) =>
+    request<OpenClawConnection>("/api/openclaw/connection", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  openclawStatus: () => request<OpenClawStatus>("/api/openclaw/status"),
+  syncOpenclaw: () => request<Record<string, unknown>>("/api/openclaw/sync", { method: "POST" }),
+
+  conversations: () => request<WechatConversation[]>("/api/wechat/conversations"),
+  conversationMessages: (conversationId: string) =>
+    request<WechatMessage[]>(`/api/wechat/conversations/${conversationId}/messages`),
+  sendWechatMessage: (conversationId: string, content: string) =>
+    request<WechatMessage>(`/api/wechat/conversations/${conversationId}/send`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
+  createCaseFromConversation: (conversationId: string, title?: string) =>
+    request<CaseItem>(`/api/wechat/conversations/${conversationId}/case`, {
+      method: "POST",
+      body: JSON.stringify({ title, case_type: "other" }),
+    }),
+  bindConversationToCase: (conversationId: string, caseId: string) =>
+    request<CaseItem>(`/api/wechat/conversations/${conversationId}/bind-case`, {
+      method: "POST",
+      body: JSON.stringify({ case_id: caseId }),
+    }),
+
+  cases: () => request<CaseItem[]>("/api/cases"),
+  createCase: (payload: { title: string; case_type: string; summary?: string }) =>
+    request<CaseItem>("/api/cases", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteCase: (caseId: string) =>
+    request<Record<string, unknown>>(`/api/cases/${caseId}`, {
+      method: "DELETE",
+    }),
+  caseDetail: (caseId: string) =>
+    request<{
+      case: CaseItem;
+      tasks: CaseTask[];
+      memories: CaseMemory[];
+      documents: LegalDocument[];
+      reasoning_runs: LegalReasoningRun[];
+      follow_up_questions: FollowUpQuestion[];
+      reply_jobs: LegalReplyJob[];
+      messages: WechatMessage[];
+    }>(`/api/cases/${caseId}`),
+  createTask: (caseId: string, title: string, assigned_agent_role?: string) =>
+    request<CaseTask>(`/api/cases/${caseId}/tasks`, {
+      method: "POST",
+      body: JSON.stringify({ title, assigned_agent_role }),
+    }),
+  deleteTask: (caseId: string, taskId: string) =>
+    request<Record<string, unknown>>(`/api/cases/${caseId}/tasks/${taskId}`, {
+      method: "DELETE",
+    }),
+  createMemory: (caseId: string, kind: string, content: string) =>
+    request<CaseMemory>(`/api/cases/${caseId}/memories`, {
+      method: "POST",
+      body: JSON.stringify({ kind, content }),
+    }),
+  deleteMemory: (caseId: string, memoryId: string) =>
+    request<Record<string, unknown>>(`/api/cases/${caseId}/memories/${memoryId}`, {
+      method: "DELETE",
+    }),
+  createFollowUpQuestion: (caseId: string, content: string) =>
+    request<FollowUpQuestion>(`/api/cases/${caseId}/follow-up-questions`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
+  deleteFollowUpQuestion: (caseId: string, questionId: string) =>
+    request<Record<string, unknown>>(
+      `/api/cases/${caseId}/follow-up-questions/${questionId}`,
+      {
+        method: "DELETE",
+      },
+    ),
+  createReplyJob: (
+    caseId: string,
+    payload: {
+      mode: "short_reply" | "long_reply";
+      title?: string;
+      case_summary?: string;
+      user_question?: string;
+      assigned_agent_role?: string;
+    },
+  ) =>
+    request<LegalReplyJob>(`/api/cases/${caseId}/reply-jobs`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  processReplyJob: (caseId: string, jobId: string) =>
+    request<LegalReplyJob>(`/api/cases/${caseId}/reply-jobs/${jobId}/process`, {
+      method: "POST",
+    }),
+  deleteReplyJob: (caseId: string, jobId: string) =>
+    request<Record<string, unknown>>(`/api/cases/${caseId}/reply-jobs/${jobId}`, {
+      method: "DELETE",
+    }),
+  sendFollowUpQuestion: (caseId: string, questionId: string, content?: string) =>
+    request<{ question: FollowUpQuestion; message: WechatMessage }>(
+      `/api/cases/${caseId}/follow-up-questions/${questionId}/send`,
+      {
+        method: "POST",
+        body: JSON.stringify({ content }),
+      },
+    ),
+
+  agents: () => request<LegalAgent[]>("/api/agents"),
+  agentArchitecture: () => request<AgentArchitecture>("/api/agents/architecture"),
+  documents: () => request<LegalDocument[]>("/api/documents"),
+  deleteReasoningRun: (caseId: string, runId: string) =>
+    request<Record<string, unknown>>(`/api/reasoning/cases/${caseId}/runs/${runId}`, {
+      method: "DELETE",
+    }),
+  createDocument: (payload: {
+    title: string;
+    case_id?: string | null;
+    document_type: string;
+    content_text: string;
+    change_summary?: string;
+  }) =>
+    request<LegalDocument>("/api/documents", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  uploadDocument: (form: FormData) =>
+    request<LegalDocument>("/api/documents/upload", {
+      method: "POST",
+      body: form,
+    }),
+  documentDetail: (documentId: string) =>
+    request<{ document: LegalDocument; revisions: LegalDocumentRevision[] }>(
+      `/api/documents/${documentId}`,
+    ),
+  deleteDocument: (documentId: string) =>
+    request<Record<string, unknown>>(`/api/documents/${documentId}`, {
+      method: "DELETE",
+    }),
+  createRevision: (documentId: string, payload: { content_text: string; change_summary?: string }) =>
+    request<LegalDocumentRevision>(`/api/documents/${documentId}/revisions`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteRevision: (documentId: string, revisionId: string) =>
+    request<Record<string, unknown>>(`/api/documents/${documentId}/revisions/${revisionId}`, {
+      method: "DELETE",
+    }),
+  uploadRevision: (documentId: string, form: FormData) =>
+    request<LegalDocumentRevision>(`/api/documents/${documentId}/revisions/upload`, {
+      method: "POST",
+      body: form,
+    }),
+  documentDiff: (documentId: string, baseRevisionId?: string, targetRevisionId?: string) => {
+    const params = new URLSearchParams();
+    if (baseRevisionId) params.set("base_revision_id", baseRevisionId);
+    if (targetRevisionId) params.set("target_revision_id", targetRevisionId);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request<LegalDocumentDiff>(`/api/documents/${documentId}/diff${suffix}`);
+  },
+  documentExportUrl: (documentId: string) => `${API_BASE}/api/documents/${documentId}/export.docx`,
+
+  generateReasoning: (caseId: string) =>
+    request<LegalReasoningRun>(`/api/reasoning/cases/${caseId}/generate`, {
+      method: "POST",
+    }),
+};
