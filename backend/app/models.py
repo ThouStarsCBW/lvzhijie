@@ -66,12 +66,21 @@ class WechatConversation(BaseModel):
     unread_count: int = 0
 
 
+class WechatAttachment(BaseModel):
+    name: str
+    url: str
+    mime_type: str | None = None
+    size: int | None = None
+
+
 class WechatMessage(BaseModel):
     id: str = Field(default_factory=lambda: new_id("msg"))
     conversation_id: str
     sender: Literal["wechat_user", "openclaw_auto", "owner", "system"]
     direction: Literal["inbound", "outbound", "internal"]
+    type: Literal["text", "image", "file", "mixed"] = "text"
     content: str
+    attachments: list[WechatAttachment] = Field(default_factory=list)
     status: Literal[
         "synced",
         "openclaw_auto_replied",
@@ -376,3 +385,17 @@ class ReplyJobCreateRequest(BaseModel):
     case_summary: str = ""
     user_question: str = ""
     assigned_agent_role: str | None = None
+
+
+class MockConversationCreateRequest(BaseModel):
+    display_name: str
+    remark: str = ""
+    avatar_url: str | None = None
+
+
+class MockConversationUpdateRequest(BaseModel):
+    display_name: str | None = None
+    remark: str | None = None
+    avatar_url: str | None = None
+    case_id: str | None = None
+    unread_count: int | None = None

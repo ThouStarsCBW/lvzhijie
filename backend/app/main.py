@@ -7,6 +7,7 @@ from docx import Document as DocxDocument
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.diffing import build_char_diff, build_paragraph_diff, summarize_legal_risks
 from app.models import (
@@ -29,6 +30,8 @@ from app.models import (
     LegalReplyJob,
     LegalReasoningRun,
     MemoryCreateRequest,
+    MockConversationCreateRequest,
+    MockConversationUpdateRequest,
     OpenClawConnection,
     ReasoningEdge,
     ReasoningNode,
@@ -42,6 +45,7 @@ from app.models import (
     WechatMessage,
     now_iso,
 )
+from app.mock_wechat_store import MockWechatStore
 from app.openclaw_adapter import OpenClawWechatAdapter
 from app.store import JsonStore
 
@@ -55,10 +59,26 @@ app.add_middleware(
 )
 
 store = JsonStore(Path(__file__).parent / "data" / "store.json")
+mock_wechat = MockWechatStore(Path(__file__).parent / "data" / "mock_wechat")
+
+app.mount(
+    "/mock-wechat-assets",
+    StaticFiles(directory=Path(__file__).parent / "data" / "mock_wechat" / "assets"),
+    name="mock-wechat-assets",
+)
 
 
 def connection() -> OpenClawConnection:
     return OpenClawConnection.model_validate(store.data["openclaw_connection"])
+
+
+def using_mock_wechat() -> bool:
+    return connection().transport_mode == "mock"
+
+
+def sync_mock_wechat_if_needed() -> None:
+    if using_mock_wechat():
+        mock_wechat.sync_to_json_store(store)
 
 
 def record(event_type: str, title: str, description: str = "", **refs: str | None) -> None:
@@ -502,6 +522,20 @@ async def openclaw_status() -> dict[str, object]:
 
 @app.post("/api/openclaw/sync")
 async def sync_openclaw_messages() -> dict[str, object]:
+    if using_mock_wechat():
+        mock_wechat.sync_to_json_store(store)
+        conversations = mock_wechat.list_conversations()
+        total_messages = sum(
+            len(mock_wechat.list_messages(c["id"])) for c in conversations
+        )
+        return {
+            "ok": True,
+            "sessions": len(conversations),
+            "messages": total_messages,
+            "errors": [],
+            "last_sync_at": now_iso(),
+        }
+
     adapter = OpenClawWechatAdapter(connection())
     synced_sessions = 0
     synced_messages = 0
@@ -600,6 +634,7 @@ async def list_openclaw_sessions() -> dict[str, object]:
 
 @app.get("/api/wechat/conversations")
 async def list_wechat_conversations() -> list[dict[str, object]]:
+    sync_mock_wechat_if_needed()
     contacts = {item.id: item for item in store.list("wechat_contacts", WechatContact)}
     conversations = store.list("wechat_conversations", WechatConversation)
     return [
@@ -619,6 +654,7 @@ async def list_wechat_conversations() -> list[dict[str, object]]:
 
 @app.get("/api/wechat/conversations/{conversation_id}/messages")
 async def get_wechat_messages(conversation_id: str) -> list[WechatMessage]:
+    sync_mock_wechat_if_needed()
     return sorted(
         store.filter("wechat_messages", WechatMessage, conversation_id=conversation_id),
         key=lambda item: item.created_at,
@@ -630,6 +666,22 @@ async def send_wechat_message(conversation_id: str, payload: SendMessageRequest)
     conversation = store.get("wechat_conversations", conversation_id, WechatConversation)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if using_mock_wechat():
+        new_msg = mock_wechat.append_message(
+            conversation_id=conversation_id,
+            sender="owner",
+            content=payload.content,
+        )
+        message = WechatMessage.model_validate(new_msg)
+        mock_wechat.sync_to_json_store(store)
+        record(
+            "wechat.sent_mock",
+            "通过演示模式发送微信消息",
+            payload.content[:120],
+            entity_type="conversation",
+            entity_id=conversation_id,
+        )
+        return message
     message = await OpenClawWechatAdapter(connection()).send_wechat_message(
         conversation_id=conversation.openclaw_conversation_id,
         content=payload.content,
@@ -1364,3 +1416,82 @@ async def generate_reasoning(case_id: str) -> LegalReasoningRun:
         )
     record("reasoning.generated", "生成 AOE 推理图", case.title, entity_type="case", entity_id=case_id)
     return run
+
+
+@app.get("/api/mock-wechat/conversations")
+async def list_mock_conversations() -> list[dict[str, object]]:
+    return mock_wechat.list_conversations()
+
+
+@app.post("/api/mock-wechat/conversations")
+async def create_mock_conversation(payload: MockConversationCreateRequest) -> dict[str, object]:
+    return mock_wechat.create_conversation(
+        display_name=payload.display_name,
+        remark=payload.remark,
+        avatar_url=payload.avatar_url,
+    )
+
+
+@app.put("/api/mock-wechat/conversations/{conversation_id}")
+async def update_mock_conversation(
+    conversation_id: str, payload: MockConversationUpdateRequest
+) -> dict[str, object]:
+    raw = {k: v for k, v in payload.model_dump().items() if v is not None}
+    contact_fields = {}
+    update_data: dict[str, object] = {}
+    for key, value in raw.items():
+        if key in {"display_name", "remark", "avatar_url"}:
+            contact_fields[key] = value
+        else:
+            update_data[key] = value
+    if contact_fields:
+        update_data["contact"] = contact_fields
+    result = mock_wechat.update_conversation(conversation_id, update_data)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Mock conversation not found")
+    return result
+
+
+@app.delete("/api/mock-wechat/conversations/{conversation_id}")
+async def delete_mock_conversation(conversation_id: str) -> dict[str, object]:
+    if not mock_wechat.delete_conversation(conversation_id):
+        raise HTTPException(status_code=404, detail="Mock conversation not found")
+    return {"ok": True}
+
+
+@app.get("/api/mock-wechat/conversations/{conversation_id}/messages")
+async def list_mock_messages(conversation_id: str) -> list[dict[str, object]]:
+    return mock_wechat.list_messages(conversation_id)
+
+
+@app.post("/api/mock-wechat/conversations/{conversation_id}/messages")
+async def create_mock_message(
+    conversation_id: str,
+    sender: str = Form(...),
+    content: str = Form(default=""),
+    files: list[UploadFile] | None = File(default=None),
+) -> dict[str, object]:
+    if sender not in {"wechat_user", "owner"}:
+        raise HTTPException(status_code=422, detail="sender must be wechat_user or owner")
+    uploads = files or []
+    if not content.strip() and not uploads:
+        raise HTTPException(status_code=422, detail="Message content or files are required")
+    attachments = []
+    for upload in uploads:
+        attachment = await mock_wechat.save_upload(upload)
+        attachments.append(attachment)
+    new_msg = mock_wechat.append_message(
+        conversation_id=conversation_id,
+        sender=sender,
+        content=content,
+        attachments=attachments,
+    )
+    mock_wechat.sync_to_json_store(store)
+    return new_msg
+
+
+@app.delete("/api/mock-wechat/conversations/{conversation_id}/messages/{message_id}")
+async def delete_mock_message(conversation_id: str, message_id: str) -> dict[str, object]:
+    if not mock_wechat.delete_message(conversation_id, message_id):
+        raise HTTPException(status_code=404, detail="Mock message not found")
+    return {"ok": True}

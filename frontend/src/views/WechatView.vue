@@ -50,7 +50,30 @@
             :key="message.id"
             :class="['message', message.direction === 'outbound' && 'outbound']"
           >
-            <div>{{ message.content }}</div>
+            <div v-if="message.content" class="message-text">{{ message.content }}</div>
+            <div v-if="message.attachments?.length" class="message-attachments">
+              <template v-for="attachment in message.attachments" :key="attachment.url">
+                <a
+                  v-if="isImageAttachment(attachment)"
+                  :href="apiAssetUrl(attachment.url)"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="message-image-link"
+                >
+                  <img :src="apiAssetUrl(attachment.url)" :alt="attachment.name" class="message-image" />
+                </a>
+                <a
+                  v-else
+                  :href="apiAssetUrl(attachment.url)"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="message-file"
+                >
+                  <span class="message-file-name">{{ attachment.name }}</span>
+                  <span class="message-file-meta">{{ formatFileSize(attachment.size) }}</span>
+                </a>
+              </template>
+            </div>
             <div class="message-meta">
               {{ senderLabel(message.sender) }} · {{ statusLabel(message.status) }}
             </div>
@@ -72,8 +95,8 @@ import { computed, onMounted, ref } from "vue";
 
 import Badge from "@/components/Badge.vue";
 import PageHeader from "@/components/PageHeader.vue";
-import { api } from "@/services/api";
-import type { CaseItem, WechatConversation, WechatMessage } from "@/types";
+import { api, apiAssetUrl } from "@/services/api";
+import type { CaseItem, WechatAttachment, WechatConversation, WechatMessage } from "@/types";
 
 const conversations = ref<WechatConversation[]>([]);
 const cases = ref<CaseItem[]>([]);
@@ -89,7 +112,10 @@ const selected = computed(() => conversations.value.find((item) => item.id === s
 const filteredMessages = computed(() => {
   const text = query.value.trim().toLowerCase();
   if (!text) return messages.value;
-  return messages.value.filter((message) => message.content.toLowerCase().includes(text));
+  return messages.value.filter((message) => {
+    const attachmentText = (message.attachments ?? []).map((item) => item.name).join(" ");
+    return `${message.content} ${attachmentText}`.toLowerCase().includes(text);
+  });
 });
 const filteredConversations = computed(() => {
   const text = query.value.trim().toLowerCase();
@@ -170,6 +196,20 @@ function autoReplyLabel(source: string) {
     system: "系统",
     manual: "人工",
   }[source] ?? source;
+}
+
+function isImageAttachment(attachment: WechatAttachment) {
+  return (
+    attachment.mime_type?.startsWith("image/") ||
+    /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(attachment.name)
+  );
+}
+
+function formatFileSize(size?: number | null) {
+  if (!size || size <= 0) return "文件";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 onMounted(load);

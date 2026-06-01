@@ -8,6 +8,7 @@ import CaseNewView from "./views/CaseNewView.vue";
 import CasesView from "./views/CasesView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import DocumentsView from "./views/DocumentsView.vue";
+import MockWechatView from "./views/MockWechatView.vue";
 import OpenClawView from "./views/OpenClawView.vue";
 import ReasoningView from "./views/ReasoningView.vue";
 import WechatView from "./views/WechatView.vue";
@@ -33,6 +34,7 @@ const router = createRouter({
     { path: "/agents", component: AgentsView },
     { path: "/openclaw", component: OpenClawView },
     { path: "/settings", component: OpenClawView },
+    { path: "/settings/mock-wechat", component: MockWechatView },
   ],
 });
 

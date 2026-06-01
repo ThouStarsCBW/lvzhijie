@@ -1,0 +1,38 @@
+[
+  {
+    "id": "conv_demo",
+    "openclaw_conversation_id": "mock_conv_demo",
+    "contact_id": "contact_demo",
+    "case_id": null,
+    "status": "open",
+    "auto_reply_source": "openclaw",
+    "last_message_at": "2026-06-01T03:19:02.196243+00:00",
+    "unread_count": 0,
+    "contact": {
+      "id": "contact_demo",
+      "openclaw_contact_id": "mock_contact_demo",
+      "display_name": "演示客户",
+      "remark": "演示会话",
+      "avatar_url": null,
+      "last_seen_at": "2026-06-01T03:19:02.196247+00:00"
+    }
+  },
+  {
+    "id": "conv_745708197a81",
+    "openclaw_conversation_id": "mock_conv_745708197a81",
+    "contact_id": "contact_1ded64dd203b",
+    "case_id": null,
+    "status": "open",
+    "auto_reply_source": "openclaw",
+    "last_message_at": "2026-06-01T07:02:21.170328+00:00",
+    "unread_count": 0,
+    "contact": {
+      "id": "contact_1ded64dd203b",
+      "openclaw_contact_id": "mock_contact_1ded64dd203b",
+      "display_name": "王雨晨",
+      "remark": "6666",
+      "avatar_url": null,
+      "last_seen_at": "2026-06-01T07:01:29.772721+00:00"
+    }
+  }
+]

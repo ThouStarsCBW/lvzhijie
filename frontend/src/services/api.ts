@@ -17,7 +17,25 @@ import type {
   WechatMessage,
 } from "@/types";
 
+export type MockConversation = WechatConversation & {
+  contact?: {
+    id: string;
+    openclaw_contact_id: string;
+    display_name: string;
+    remark?: string | null;
+    avatar_url?: string | null;
+    last_seen_at?: string | null;
+  } | null;
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
+export function apiAssetUrl(path: string) {
+  if (!path) return "";
+  if (/^(https?:|data:|blob:)/i.test(path)) return path;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${API_BASE.replace(/\/$/, "")}${normalizedPath}`;
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const isFormData = options?.body instanceof FormData;
@@ -206,4 +224,52 @@ export const api = {
     request<LegalReasoningRun>(`/api/reasoning/cases/${caseId}/generate`, {
       method: "POST",
     }),
+
+  mockWechatConversations: () => request<MockConversation[]>("/api/mock-wechat/conversations"),
+  createMockWechatConversation: (payload: {
+    display_name: string;
+    remark?: string;
+    avatar_url?: string | null;
+  }) =>
+    request<MockConversation>("/api/mock-wechat/conversations", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateMockWechatConversation: (
+    conversationId: string,
+    payload: Record<string, unknown>,
+  ) =>
+    request<MockConversation>(
+      `/api/mock-wechat/conversations/${conversationId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    ),
+  deleteMockWechatConversation: (conversationId: string) =>
+    request<Record<string, unknown>>(
+      `/api/mock-wechat/conversations/${conversationId}`,
+      {
+        method: "DELETE",
+      },
+    ),
+  mockWechatMessages: (conversationId: string) =>
+    request<WechatMessage[]>(
+      `/api/mock-wechat/conversations/${conversationId}/messages`,
+    ),
+  createMockWechatMessage: (conversationId: string, form: FormData) =>
+    request<WechatMessage>(
+      `/api/mock-wechat/conversations/${conversationId}/messages`,
+      {
+        method: "POST",
+        body: form,
+      },
+    ),
+  deleteMockWechatMessage: (conversationId: string, messageId: string) =>
+    request<Record<string, unknown>>(
+      `/api/mock-wechat/conversations/${conversationId}/messages/${messageId}`,
+      {
+        method: "DELETE",
+      },
+    ),
 };

@@ -49,12 +49,21 @@ export type WechatConversation = {
   contact?: WechatContact | null;
 };
 
+export type WechatAttachment = {
+  name: string;
+  url: string;
+  mime_type?: string | null;
+  size?: number | null;
+};
+
 export type WechatMessage = {
   id: string;
   conversation_id: string;
   sender: "wechat_user" | "openclaw_auto" | "owner" | "system";
   direction: "inbound" | "outbound" | "internal";
+  type?: "text" | "image" | "file" | "mixed";
   content: string;
+  attachments?: WechatAttachment[];
   status: string;
   created_at: string;
 };

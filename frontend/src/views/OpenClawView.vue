@@ -78,11 +78,19 @@
         </div>
       </section>
     </div>
+    <section class="panel" style="margin-top: 16px">
+      <h2 class="panel-title">演示聊天记录</h2>
+      <p class="panel-subtitle">管理本地 Mock 微信聊天记录，用于演示和测试。</p>
+      <RouterLink class="button primary" to="/settings/mock-wechat">
+        打开演示聊天编辑器
+      </RouterLink>
+    </section>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
+import { RouterLink } from "vue-router";
 
 import Badge from "@/components/Badge.vue";
 import PageHeader from "@/components/PageHeader.vue";
