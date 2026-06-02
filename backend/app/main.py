@@ -59,6 +59,28 @@ from app.mock_wechat_store import MockWechatStore
 from app.openclaw_adapter import OpenClawWechatAdapter
 from app.store import JsonStore
 
+
+def load_local_env() -> None:
+    env_paths = [
+        Path(__file__).resolve().parents[1] / ".env",
+        Path(__file__).resolve().parents[2] / ".env",
+    ]
+    for env_path in env_paths:
+        if not env_path.exists():
+            continue
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                os.environ.setdefault(key, value)
+
+
+load_local_env()
+
 app = FastAPI(title="Lvzhijie Legal Workspace API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,

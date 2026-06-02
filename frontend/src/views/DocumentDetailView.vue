@@ -272,25 +272,47 @@
               <div class="diff-stats">
                 <span class="stat">
                   <FileDiff class="icon" />
-                  {{ diffResult.segments.length }} 个差异段落
+                  {{ changedSegmentCount }} 个逐字差异
                 </span>
                 <span class="stat">
                   <RefreshCw class="icon" />
-                  {{ diffResult.paragraph_changes.length }} 处段落变更
+                  {{ changedParagraphs.length }} 处段落变更
                 </span>
               </div>
-              
+
+              <!-- 逐字差异 -->
+              <div class="inline-diff-section">
+                <h4 class="diff-section-title">逐字差异</h4>
+                <div class="inline-diff">
+                  <span
+                    v-for="(segment, index) in visibleDiffSegments"
+                    :key="index"
+                    :class="{
+                      'diff-insert': segment.op === 'insert',
+                      'diff-delete': segment.op === 'delete',
+                      'diff-fold': segment.op === 'fold',
+                    }"
+                  >{{ segment.text }}</span>
+                </div>
+              </div>
+               
               <!-- 段落变更 -->
               <div class="paragraph-changes">
-                <div v-for="(change, index) in diffResult.paragraph_changes" :key="index" class="paragraph-change">
+                <h4 class="diff-section-title">段落变更</h4>
+                <div v-if="changedParagraphs.length === 0" class="empty-diff-state">
+                  未发现段落级变更，请查看上方逐字差异。
+                </div>
+                <div v-for="(change, index) in changedParagraphs" :key="index" class="paragraph-change">
                   <div class="change-header">
                     <span class="change-op" :class="change.op">{{ changeOpLabel(change.op) }}</span>
                   </div>
                   <div v-if="change.base" class="change-base">
-                    <span class="label">原文:</span> {{ formatChangeText(change.base) }}
+                    <span class="label">原文:</span>
+                    <span class="change-text">{{ formatChangeText(change.base) }}</span>
                   </div>
                   <div v-if="change.target" class="change-target">
-                    <span class="label">新文:</span> {{ formatChangeText(change.target) }}
+                    <span class="label">新文:</span>
+                    <span class="change-text">{{ formatChangeText(change.target) }}</span>
                   </div>
                 </div>
               </div>
@@ -480,6 +502,65 @@ const diffExportUrl = computed(() => {
   return api.documentDiffExportUrl(documentId.value, diffBaseRevisionId.value, diffTargetRevisionId.value);
 });
 
+type VisibleDiffSegment = {
+  op: "equal" | "insert" | "delete" | "fold";
+  text: string;
+};
+
+const changedParagraphs = computed(() => {
+  return diffResult.value?.paragraph_changes.filter((change) => change.op !== "equal") ?? [];
+});
+
+const changedSegmentCount = computed(() => {
+  return diffResult.value?.segments.filter((segment) => segment.op !== "equal").length ?? 0;
+});
+
+const visibleDiffSegments = computed<VisibleDiffSegment[]>(() => {
+  if (!diffResult.value) return [];
+  return compactDiffSegments(diffResult.value.segments);
+});
+
+function compactDiffSegments(
+  segments: LegalDocumentDiff["segments"],
+  contextLength = 180,
+): VisibleDiffSegment[] {
+  const visible: VisibleDiffSegment[] = [];
+  const hasChanges = segments.some((segment) => segment.op !== "equal");
+  if (!hasChanges) {
+    return segments.map((segment) => ({ op: "equal", text: segment.text }));
+  }
+
+  for (const [index, segment] of segments.entries()) {
+    if (segment.op !== "equal") {
+      visible.push({ op: segment.op === "insert" ? "insert" : "delete", text: segment.text });
+      continue;
+    }
+
+    if (segment.text.length <= contextLength * 2) {
+      visible.push({ op: "equal", text: segment.text });
+      continue;
+    }
+
+    const hiddenLength = segment.text.length - contextLength;
+    if (index === 0) {
+      visible.push({ op: "fold", text: `\n... 已折叠 ${hiddenLength} 字未变化内容 ...\n` });
+      visible.push({ op: "equal", text: segment.text.slice(-contextLength) });
+    } else if (index === segments.length - 1) {
+      visible.push({ op: "equal", text: segment.text.slice(0, contextLength) });
+      visible.push({ op: "fold", text: `\n... 已折叠 ${hiddenLength} 字未变化内容 ...\n` });
+    } else {
+      visible.push({ op: "equal", text: segment.text.slice(0, contextLength) });
+      visible.push({
+        op: "fold",
+        text: `\n... 已折叠 ${segment.text.length - contextLength * 2} 字未变化内容 ...\n`,
+      });
+      visible.push({ op: "equal", text: segment.text.slice(-contextLength) });
+    }
+  }
+
+  return visible;
+}
+
 // 方法
 async function loadDocument() {
   loading.value = true;
@@ -647,8 +728,7 @@ function changeOpLabel(op: string) {
 
 function formatChangeText(text: string) {
   if (!text) return "";
-  // 将换行符替换为分号和空格，使文本在一行内显示
-  return text.replace(/\n/g, "；").replace(/；；/g, "；");
+  return text.trim();
 }
 
 // 初始化
@@ -1070,6 +1150,56 @@ watch(documentId, (newId) => {
   color: var(--blue);
 }
 
+.diff-section-title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.inline-diff-section {
+  margin-bottom: 18px;
+}
+
+.inline-diff {
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.inline-diff .diff-insert {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.inline-diff .diff-delete {
+  background: #fee2e2;
+  color: #991b1b;
+  text-decoration: line-through;
+}
+
+.inline-diff .diff-fold {
+  display: block;
+  margin: 8px 0;
+  padding: 6px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-family: inherit;
+  text-align: center;
+  text-decoration: none;
+}
+
 .diff-content {
   font-family: monospace;
   font-size: 12px;
@@ -1312,11 +1442,21 @@ watch(documentId, (newId) => {
   margin-top: 16px;
 }
 
+.empty-diff-state {
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  background: #fff;
+}
+
 .paragraph-change {
   padding: 12px;
   margin-bottom: 12px;
-  background: var(--surface-muted);
+  background: #fff;
   border-radius: 6px;
+  border: 1px solid var(--border);
   border-left: 3px solid var(--border);
 }
 
@@ -1366,16 +1506,33 @@ watch(documentId, (newId) => {
 
 .change-base,
 .change-target {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
   font-size: 13px;
-  line-height: 1.5;
-  margin-top: 4px;
+  line-height: 1.65;
+  margin-top: 8px;
 }
 
 .change-base .label,
 .change-target .label {
   font-weight: 500;
   color: var(--muted);
-  margin-right: 8px;
+}
+
+.change-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.change-base .change-text {
+  color: var(--red);
+  text-decoration: line-through;
+}
+
+.change-target .change-text {
+  color: var(--green);
 }
 
 /* 风险提示样式 */
