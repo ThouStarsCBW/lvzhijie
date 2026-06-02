@@ -306,3 +306,77 @@ def test_assets_are_served(client: TestClient) -> None:
     response = client.get(asset_url)
     assert response.status_code == 200
     assert response.content == file_content
+
+
+def test_follow_up_send_in_mock_mode_writes_to_mock_messages(client: TestClient) -> None:
+    # Step 1: Set mock mode
+    connection = OpenClawConnection(transport_mode="mock")
+    assert client.put("/api/openclaw/connection", json=connection.model_dump()).status_code == 200
+
+    # Step 2: Generate reasoning
+    generated = client.post("/api/reasoning/cases/case_demo/generate")
+    assert generated.status_code == 200
+
+    # Step 3: Get follow-up questions
+    detail = client.get("/api/cases/case_demo").json()
+    questions = detail["follow_up_questions"]
+    assert questions
+    question = questions[0]
+
+    # Step 4: Send follow-up
+    sent = client.post(
+        f"/api/cases/case_demo/follow-up-questions/{question['id']}/send",
+        json={},
+    )
+    assert sent.status_code == 200
+
+    # Step 5: Check mock messages endpoint
+    messages = client.get("/api/mock-wechat/conversations/conv_demo/messages").json()
+
+    # Assert the follow-up was written to mock messages
+    assert any(
+        m["content"] == question["content"]
+        and m["sender"] == "owner"
+        and m["direction"] == "outbound"
+        for m in messages
+    )
+
+    # Step 6: Check return value compatibility
+    payload = sent.json()
+    assert payload["question"]["status"] == "sent_via_openclaw"
+    assert payload["message"]["sender"] == "owner"
+    assert payload["message"]["direction"] == "outbound"
+
+
+def test_follow_up_send_in_mock_mode_does_not_call_openclaw_adapter(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Step 1: Set mock mode
+    connection = OpenClawConnection(transport_mode="mock")
+    assert client.put("/api/openclaw/connection", json=connection.model_dump()).status_code == 200
+
+    # Step 2: Monkeypatch OpenClawWechatAdapter.send_wechat_message to fail if called
+    async def fail_if_called(*args, **kwargs):
+        raise AssertionError("OpenClaw adapter must not be called in mock mode")
+
+    monkeypatch.setattr(
+        main.OpenClawWechatAdapter,
+        "send_wechat_message",
+        fail_if_called,
+    )
+
+    # Step 3: Generate reasoning
+    generated = client.post("/api/reasoning/cases/case_demo/generate")
+    assert generated.status_code == 200
+
+    # Step 4: Get follow-up question
+    detail = client.get("/api/cases/case_demo").json()
+    question = detail["follow_up_questions"][0]
+
+    # Step 5: Send follow-up - must succeed without calling OpenClaw adapter
+    sent = client.post(
+        f"/api/cases/case_demo/follow-up-questions/{question['id']}/send",
+        json={},
+    )
+    assert sent.status_code == 200

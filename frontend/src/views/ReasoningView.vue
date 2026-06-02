@@ -31,7 +31,7 @@
       </section>
       <section class="panel">
         <h2 class="panel-title">待追问问题</h2>
-        <p class="panel-subtitle">可以一键经微信桥发送给微信用户。</p>
+        <p class="panel-subtitle">可以一键发送到当前聊天通道。</p>
         <div v-if="actionMessage" class="muted small" style="margin-bottom: 10px">{{ actionMessage }}</div>
         <div v-for="question in detail?.follow_up_questions ?? []" :key="question.id" class="list-item follow-up-row">
           <div>
@@ -43,7 +43,7 @@
             :disabled="!detail?.case.conversation_ref || question.status === 'sent_via_openclaw'"
             @click="sendFollowUp(question.id)"
           >
-            发微信
+            发送
           </button>
         </div>
         <h2 class="panel-title" style="margin-top: 20px">边关系</h2>
@@ -92,8 +92,8 @@ async function sendFollowUp(questionId: string) {
     const result = await api.sendFollowUpQuestion(selectedCaseId.value, questionId);
     actionMessage.value =
       result.question.status === "sent_via_openclaw"
-        ? "追问已通过微信桥发送。"
-        : `发送失败：${result.question.failure_reason || "请检查微信桥配置"}`;
+        ? "追问已写入当前聊天通道。"
+        : `发送失败：${result.question.failure_reason || "请检查聊天通道配置"}`;
   } catch (error) {
     actionMessage.value = error instanceof Error ? error.message : "发送失败";
   }

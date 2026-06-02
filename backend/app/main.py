@@ -1384,12 +1384,26 @@ async def send_follow_up_question(
     if not content:
         raise HTTPException(status_code=422, detail="Follow-up content is empty")
 
-    message = await OpenClawWechatAdapter(connection()).send_wechat_message(
-        conversation_id=conversation.openclaw_conversation_id,
-        content=content,
-    )
-    message.conversation_id = conversation.id
-    store.add("wechat_messages", message)
+    if using_mock_wechat():
+        new_msg = mock_wechat.append_message(
+            conversation_id=conversation.id,
+            sender="owner",
+            content=content,
+        )
+        message = WechatMessage.model_validate(new_msg)
+        mock_wechat.sync_to_json_store(store)
+        event_type = "follow_up.sent_mock"
+        event_title = "通过演示模式发送追问"
+    else:
+        message = await OpenClawWechatAdapter(connection()).send_wechat_message(
+            conversation_id=conversation.openclaw_conversation_id,
+            content=content,
+        )
+        message.conversation_id = conversation.id
+        store.add("wechat_messages", message)
+        event_type = "follow_up.sent"
+        event_title = "通过 OpenClaw 发送追问"
+
     conversation.last_message_at = message.created_at
     store.update("wechat_conversations", conversation)
 
@@ -1402,8 +1416,8 @@ async def send_follow_up_question(
     question.updated_at = now_iso()
     store.update("follow_up_questions", question)
     record(
-        "follow_up.sent",
-        "通过 OpenClaw 发送追问",
+        event_type,
+        event_title,
         content[:120],
         entity_type="case",
         entity_id=case_id,

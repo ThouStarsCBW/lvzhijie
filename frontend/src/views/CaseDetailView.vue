@@ -245,7 +245,7 @@
 
       <section class="panel">
         <h2 class="panel-title">追问问题</h2>
-        <p class="panel-subtitle">发送动作通过微信桥通道完成。</p>
+        <p class="panel-subtitle">发送动作通过当前聊天通道完成。</p>
         <textarea v-model="followUpContent" class="textarea" placeholder="手动添加追问" />
         <div class="form-actions">
           <button class="button" :disabled="!followUpContent.trim()" @click="createFollowUp">
@@ -264,7 +264,7 @@
               :disabled="!detail.case.conversation_ref || question.status === 'sent_via_openclaw'"
               @click="sendFollowUp(question.id)"
             >
-              发微信
+              发送
             </button>
             <button class="button danger" :disabled="deletingId === question.id" @click="deleteFollowUp(question.id)">
               {{ deletingId === question.id ? "删除中" : confirmingId === question.id ? "确认删除" : "删除" }}
@@ -495,8 +495,8 @@ async function sendFollowUp(questionId: string) {
     const result = await api.sendFollowUpQuestion(props.id, questionId);
     actionMessage.value =
       result.question.status === "sent_via_openclaw"
-        ? "追问已通过微信桥发送。"
-        : `发送失败：${result.question.failure_reason || "请检查微信桥配置"}`;
+        ? "追问已写入当前聊天通道。"
+        : `发送失败：${result.question.failure_reason || "请检查聊天通道配置"}`;
   } catch (error) {
     actionMessage.value = error instanceof Error ? error.message : "发送失败";
   }
