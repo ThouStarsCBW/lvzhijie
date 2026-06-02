@@ -254,3 +254,248 @@ def test_delete_wechat_conversation_removes_messages_and_unbinds_case(client: Te
     case = client.get("/api/cases/case_demo").json()["case"]
     assert case["conversation_ref"] is None
     assert case["wechat_contact_ref"] is None
+
+
+# ---- Section 14: Version Control Tests ----
+
+
+def test_upload_creates_main_branch_automatically(client: TestClient) -> None:
+    """14.1: Upload file automatically creates main branch."""
+    resp = client.post(
+        "/api/documents/upload",
+        data={"title": "测试合同", "document_type": "contract", "change_summary": "上传初始版本"},
+        files={"file": ("contract.txt", "甲方应在验收后7日内付款。", "text/plain")},
+    )
+    assert resp.status_code == 200
+    document_id = resp.json()["id"]
+
+    detail = client.get(f"/api/documents/{document_id}").json()
+    assert "branches" in detail
+    branches = detail["branches"]
+    main_branch = next((b for b in branches if b["name"] == "main"), None)
+    assert main_branch is not None
+    assert main_branch["is_default"] is True
+
+    revisions = detail["revisions"]
+    assert len(revisions) >= 1
+    assert revisions[0]["branch_id"] == main_branch["id"]
+
+
+def test_create_branch(client: TestClient) -> None:
+    """14.2: Create a new branch from existing revision."""
+    resp = client.post(
+        "/api/documents",
+        json={"title": "分支测试", "document_type": "contract", "content_text": "初始版本文本。"},
+    )
+    assert resp.status_code == 200
+    document_id = resp.json()["id"]
+
+    detail = client.get(f"/api/documents/{document_id}").json()
+    first_revision_id = detail["revisions"][0]["id"]
+
+    branch_resp = client.post(
+        f"/api/documents/{document_id}/branches",
+        json={"name": "client-edits", "base_revision_id": first_revision_id},
+    )
+    assert branch_resp.status_code == 200
+    branch = branch_resp.json()
+    assert branch["name"] == "client-edits"
+    assert branch["head_revision_id"] == first_revision_id
+    assert branch["base_revision_id"] == first_revision_id
+    assert branch["is_default"] is False
+
+
+def test_upload_revision_to_branch(client: TestClient) -> None:
+    """14.3: Upload a new revision to a specific branch."""
+    resp = client.post(
+        "/api/documents",
+        json={"title": "分支上传测试", "document_type": "contract", "content_text": "初始版本。"},
+    )
+    assert resp.status_code == 200
+    document_id = resp.json()["id"]
+
+    detail = client.get(f"/api/documents/{document_id}").json()
+    base_rev_id = detail["revisions"][0]["id"]
+
+    branch_resp = client.post(
+        f"/api/documents/{document_id}/branches",
+        json={"name": "test-branch", "base_revision_id": base_rev_id},
+    )
+    assert branch_resp.status_code == 200
+    branch_id = branch_resp.json()["id"]
+
+    upload_resp = client.post(
+        f"/api/documents/{document_id}/branches/{branch_id}/revisions/upload",
+        files={"file": ("v2.txt", "分支上的新版本内容。", "text/plain")},
+        data={"change_summary": "分支上传"},
+    )
+    assert upload_resp.status_code == 200
+    new_rev = upload_resp.json()
+    assert new_rev["branch_id"] == branch_id
+    assert new_rev["parent_revision_id"] == base_rev_id
+
+    tree = client.get(f"/api/documents/{document_id}/tree").json()
+    branch_in_tree = next(b for b in tree["branches"] if b["id"] == branch_id)
+    assert any(r["id"] == new_rev["id"] for r in branch_in_tree["revisions"])
+
+
+def test_cross_branch_diff(client: TestClient) -> None:
+    """14.4: Cross-branch diff between different branches."""
+    resp = client.post(
+        "/api/documents/upload",
+        data={"title": "跨分支对比", "document_type": "contract", "change_summary": "初始"},
+        files={"file": ("v1.txt", "甲方应在验收后7日内付款。", "text/plain")},
+    )
+    assert resp.status_code == 200
+    document_id = resp.json()["id"]
+
+    detail = client.get(f"/api/documents/{document_id}").json()
+    main_rev1_id = detail["revisions"][0]["id"]
+    main_branch_id = detail["branches"][0]["id"]
+
+    # Create branch A from v1
+    branch_resp = client.post(
+        f"/api/documents/{document_id}/branches",
+        json={"name": "branch-a", "base_revision_id": main_rev1_id},
+    )
+    assert branch_resp.status_code == 200
+    branch_a_id = branch_resp.json()["id"]
+
+    # Upload v2 to branch A
+    upload_a = client.post(
+        f"/api/documents/{document_id}/branches/{branch_a_id}/revisions/upload",
+        files={"file": ("v2a.txt", "甲方应在验收后14日内付款。违约金每日万分之二。", "text/plain")},
+        data={"change_summary": "分支A版本"},
+    )
+    assert upload_a.status_code == 200
+    branch_a_rev_id = upload_a.json()["id"]
+
+    # Upload v3 to main
+    upload_main = client.post(
+        f"/api/documents/{document_id}/branches/{main_branch_id}/revisions/upload",
+        files={"file": ("v3.txt", "甲方应在验收后30日内付款。违约金每日万分之一。", "text/plain")},
+        data={"change_summary": "主分支版本"},
+    )
+    assert upload_main.status_code == 200
+    main_rev3_id = upload_main.json()["id"]
+
+    # Cross-branch diff
+    diff = client.get(
+        f"/api/documents/{document_id}/diff",
+        params={"base_revision_id": branch_a_rev_id, "target_revision_id": main_rev3_id},
+    )
+    assert diff.status_code == 200
+    assert diff.json()["segments"]
+
+
+def test_export_diff_docx(client: TestClient) -> None:
+    """14.5: Export diff as Word document with red/green markers."""
+    resp = client.post(
+        "/api/documents",
+        json={"title": "Word导出测试", "document_type": "contract", "content_text": "原始文本内容。"},
+    )
+    assert resp.status_code == 200
+    document_id = resp.json()["id"]
+
+    detail = client.get(f"/api/documents/{document_id}").json()
+    rev1_id = detail["revisions"][0]["id"]
+    main_branch_id = detail["branches"][0]["id"]
+
+    upload_resp = client.post(
+        f"/api/documents/{document_id}/branches/{main_branch_id}/revisions",
+        json={"content_text": "修改后的新版本文本内容。", "change_summary": "修改版本"},
+    )
+    assert upload_resp.status_code == 200
+    rev2_id = upload_resp.json()["id"]
+
+    exported = client.get(
+        f"/api/documents/{document_id}/diff/export.docx",
+        params={"base_revision_id": rev1_id, "target_revision_id": rev2_id},
+    )
+    assert exported.status_code == 200
+    assert exported.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert exported.content.startswith(b"PK")
+
+
+def test_ai_analysis_fallback_without_key(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """14.6: AI analysis falls back to rule-based when no API key."""
+    monkeypatch.delenv("LVZHIJIE_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    resp = client.post(
+        "/api/documents",
+        json={"title": "AI分析测试", "document_type": "contract", "content_text": "甲方应付款。违约金每日万分之三。"},
+    )
+    assert resp.status_code == 200
+    document_id = resp.json()["id"]
+
+    detail = client.get(f"/api/documents/{document_id}").json()
+    rev1_id = detail["revisions"][0]["id"]
+    main_branch_id = detail["branches"][0]["id"]
+
+    upload_resp = client.post(
+        f"/api/documents/{document_id}/branches/{main_branch_id}/revisions",
+        json={"content_text": "甲方应30日内付款。违约金每日万分之一。", "change_summary": "修改"},
+    )
+    assert upload_resp.status_code == 200
+    rev2_id = upload_resp.json()["id"]
+
+    analysis = client.post(
+        f"/api/documents/{document_id}/diff/analyze",
+        json={"base_revision_id": rev1_id, "target_revision_id": rev2_id},
+    )
+    assert analysis.status_code == 200
+    result = analysis.json()
+    assert result["source"] == "rule_fallback"
+    assert len(result["risk_points"]) > 0
+    assert len(result["manual_review_checklist"]) > 0
+
+
+def test_delete_document_cascades_branches_and_analyses(client: TestClient) -> None:
+    """14.7: Deleting a document cascades branches and analyses."""
+    resp = client.post(
+        "/api/documents",
+        json={"title": "级联删除测试", "document_type": "contract", "content_text": "测试文本。"},
+    )
+    assert resp.status_code == 200
+    document_id = resp.json()["id"]
+
+    detail = client.get(f"/api/documents/{document_id}").json()
+    rev1_id = detail["revisions"][0]["id"]
+    main_branch_id = detail["branches"][0]["id"]
+
+    # Create a branch
+    branch_resp = client.post(
+        f"/api/documents/{document_id}/branches",
+        json={"name": "temp-branch", "base_revision_id": rev1_id},
+    )
+    assert branch_resp.status_code == 200
+
+    # Upload another revision for analysis
+    upload_resp = client.post(
+        f"/api/documents/{document_id}/branches/{main_branch_id}/revisions",
+        json={"content_text": "新版本文本。", "change_summary": "新版本"},
+    )
+    assert upload_resp.status_code == 200
+    rev2_id = upload_resp.json()["id"]
+
+    # Create analysis
+    import os
+    os.environ.pop("LVZHIJIE_LLM_API_KEY", None)
+    os.environ.pop("OPENAI_API_KEY", None)
+    analysis_resp = client.post(
+        f"/api/documents/{document_id}/diff/analyze",
+        json={"base_revision_id": rev1_id, "target_revision_id": rev2_id},
+    )
+    assert analysis_resp.status_code == 200
+
+    # Delete document
+    deleted = client.delete(f"/api/documents/{document_id}")
+    assert deleted.status_code == 200
+    assert client.get(f"/api/documents/{document_id}").status_code == 404
+
+    # Verify tree has no branches for this document
+    tree_resp = client.get(f"/api/documents/{document_id}/tree")
+    assert tree_resp.status_code == 404

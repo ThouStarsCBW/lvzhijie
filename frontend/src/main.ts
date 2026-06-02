@@ -7,6 +7,7 @@ import CaseDetailView from "./views/CaseDetailView.vue";
 import CaseNewView from "./views/CaseNewView.vue";
 import CasesView from "./views/CasesView.vue";
 import DashboardView from "./views/DashboardView.vue";
+import DocumentDetailView from "./views/DocumentDetailView.vue";
 import DocumentsView from "./views/DocumentsView.vue";
 import MockWechatView from "./views/MockWechatView.vue";
 import OpenClawView from "./views/OpenClawView.vue";
@@ -30,6 +31,7 @@ const router = createRouter({
     { path: "/cases/:id/workflow", component: CaseDetailView, props: true },
     { path: "/cases/:id/reasoning", component: CaseDetailView, props: true },
     { path: "/documents", component: DocumentsView },
+    { path: "/documents/:id", component: DocumentDetailView, props: true },
     { path: "/reasoning", component: ReasoningView },
     { path: "/agents", component: AgentsView },
     { path: "/openclaw", component: OpenClawView },

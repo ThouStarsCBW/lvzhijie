@@ -14,6 +14,12 @@ LEGAL_RISK_KEYWORDS = {
     "仲裁": "争议解决方式发生变化，需要确认是否排除法院管辖。",
     "保密": "保密义务发生变化，需要核对义务主体、期限和例外。",
     "责任": "责任承担条款发生变化，需要关注免责和限责内容。",
+    "期限": "期限条款发生变化，需要核对是否改变履行、通知、解除或追责节点。",
+    "通知": "通知方式或通知期限发生变化，可能影响送达和违约起算。",
+    "赔偿": "赔偿条款发生变化，需要关注赔偿范围、上限和证明责任。",
+    "免责": "免责或限责条款发生变化，可能削弱追责空间。",
+    "知识产权": "知识产权归属或授权范围发生变化，需要核对权利转让和使用限制。",
+    "个人信息": "个人信息或隐私条款发生变化，需要关注合规义务和授权范围。",
 }
 
 
@@ -81,6 +87,24 @@ def summarize_legal_risks(base: str, target: str) -> list[str]:
     if not risks:
         risks.append("发现文本变化，请人工核对是否影响权利义务、履行期限或争议解决。")
     return list(dict.fromkeys(risks))[:6]
+
+
+def build_changed_text_for_analysis(base: str, target: str, limit: int = 6000) -> str:
+    matcher = SequenceMatcher(a=base, b=target)
+    parts: list[str] = []
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        if op == "equal":
+            continue
+        ctx_start = max(0, i1 - 40)
+        ctx_end = min(len(base), i2 + 40)
+        ctx_start_t = max(0, j1 - 40)
+        ctx_end_t = min(len(target), j2 + 40)
+        part = f"[删除] {base[ctx_start:ctx_end]}\n[新增] {target[ctx_start_t:ctx_end_t]}"
+        parts.append(part)
+        if sum(len(p) for p in parts) >= limit:
+            break
+    result = "\n---\n".join(parts)
+    return result[:limit]
 
 
 def _merge_adjacent(segments: list[DiffSegment]) -> list[DiffSegment]:

@@ -8,6 +8,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from difflib import SequenceMatcher
 from docx import Document as DocxDocument
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,8 @@ from app.models import (
     AgentDepartment,
     AgentGroup,
     BindConversationCaseRequest,
+    BranchCreateRequest,
+    BranchRevisionCreateRequest,
     Case,
     CaseCreateRequest,
     CaseMemory,
@@ -30,6 +33,8 @@ from app.models import (
     FollowUpQuestion,
     LegalAgent,
     LegalDocument,
+    LegalDocumentAnalysis,
+    LegalDocumentBranch,
     LegalDocumentDiff,
     LegalDocumentRevision,
     LegalReplyJob,
@@ -102,7 +107,79 @@ def record(event_type: str, title: str, description: str = "", **refs: str | Non
 def delete_document_rows(document_id: str) -> None:
     store.remove_where("legal_document_revisions", lambda row: row.get("document_id") == document_id)
     store.remove_where("legal_document_diffs", lambda row: row.get("document_id") == document_id)
+    store.remove_where("legal_document_branches", lambda row: row.get("document_id") == document_id)
+    store.remove_where("legal_document_analyses", lambda row: row.get("document_id") == document_id)
     store.delete("legal_documents", document_id)
+
+
+def make_revision_short_hash(revision: LegalDocumentRevision) -> str:
+    return revision.id.replace("rev_", "")[:7]
+
+
+def create_default_branch_for_document(document: LegalDocument, first_revision: LegalDocumentRevision) -> LegalDocumentBranch:
+    branch = LegalDocumentBranch(
+        document_id=document.id,
+        name="main",
+        head_revision_id=first_revision.id,
+        base_revision_id=first_revision.id,
+        is_default=True,
+    )
+    first_revision.branch_id = branch.id
+    first_revision.parent_revision_id = None
+    first_revision.created_from_revision_id = None
+    first_revision.short_hash = make_revision_short_hash(first_revision)
+    document.default_branch_id = branch.id
+    document.current_revision_id = first_revision.id
+    store.add("legal_document_branches", branch)
+    return branch
+
+
+def document_branches(document_id: str) -> list[LegalDocumentBranch]:
+    return sorted(
+        store.filter("legal_document_branches", LegalDocumentBranch, document_id=document_id),
+        key=lambda item: (not item.is_default, item.name.lower(), item.created_at),
+    )
+
+
+def get_document_branch(document_id: str, branch_id: str) -> LegalDocumentBranch:
+    branch = store.get("legal_document_branches", branch_id, LegalDocumentBranch)
+    if not branch or branch.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    return branch
+
+
+def create_revision_on_branch(
+    *,
+    document: LegalDocument,
+    branch: LegalDocumentBranch,
+    content_text: str,
+    source_filename: str | None,
+    author_type: str,
+    change_summary: str,
+) -> LegalDocumentRevision:
+    revisions = store.filter("legal_document_revisions", LegalDocumentRevision, document_id=document.id)
+    parent_id = branch.head_revision_id
+    revision = LegalDocumentRevision(
+        document_id=document.id,
+        version_number=len(revisions) + 1,
+        content_text=content_text,
+        source_filename=source_filename,
+        author_type=author_type,
+        change_summary=change_summary,
+        branch_id=branch.id,
+        parent_revision_id=parent_id,
+        created_from_revision_id=parent_id,
+    )
+    revision.short_hash = make_revision_short_hash(revision)
+    branch.head_revision_id = revision.id
+    branch.updated_at = now_iso()
+    document.updated_at = now_iso()
+    if branch.is_default:
+        document.current_revision_id = revision.id
+    store.add("legal_document_revisions", revision)
+    store.update("legal_document_branches", branch)
+    store.update("legal_documents", document)
+    return revision
 
 
 def delete_wechat_conversation_rows(conversation: WechatConversation) -> dict[str, object]:
@@ -1355,7 +1432,7 @@ async def create_document(payload: DocumentCreateRequest) -> LegalDocument:
         source_filename=payload.source_filename,
         change_summary=payload.change_summary,
     )
-    document.current_revision_id = revision.id
+    create_default_branch_for_document(document, revision)
     store.add("legal_documents", document)
     store.add("legal_document_revisions", revision)
     record("document.created", "创建法律文件", document.title, entity_type="document", entity_id=document.id)
@@ -1388,7 +1465,7 @@ async def upload_document(
         author_type="import",
         change_summary=change_summary,
     )
-    document.current_revision_id = revision.id
+    create_default_branch_for_document(document, revision)
     store.add("legal_documents", document)
     store.add("legal_document_revisions", revision)
     record("document.uploaded", "上传法律文件", document.title, entity_type="document", entity_id=document.id)
@@ -1401,7 +1478,74 @@ async def get_document(document_id: str) -> dict[str, object]:
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     revisions = store.filter("legal_document_revisions", LegalDocumentRevision, document_id=document_id)
-    return {"document": document, "revisions": sorted(revisions, key=lambda item: item.version_number)}
+    branches = document_branches(document_id)
+    return {
+        "document": document,
+        "branches": branches,
+        "revisions": sorted(revisions, key=lambda item: item.version_number),
+    }
+
+
+@app.get("/api/documents/{document_id}/tree")
+async def get_document_tree(document_id: str) -> dict[str, object]:
+    document = store.get("legal_documents", document_id, LegalDocument)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    branches = document_branches(document_id)
+    tree_branches = []
+    for branch in branches:
+        revisions = store.filter("legal_document_revisions", LegalDocumentRevision, document_id=document_id, branch_id=branch.id)
+        revisions.sort(key=lambda item: item.version_number)
+        tree_revisions = []
+        for rev in revisions:
+            label = f"v{rev.version_number} {rev.short_hash or ''} {rev.change_summary or '无版本说明'}"
+            tree_revisions.append({
+                "id": rev.id,
+                "label": label,
+                "version_number": rev.version_number,
+                "short_hash": rev.short_hash,
+                "parent_revision_id": rev.parent_revision_id,
+                "change_summary": rev.change_summary,
+                "source_filename": rev.source_filename,
+                "created_at": rev.created_at,
+            })
+        tree_branches.append({
+            **branch.model_dump(),
+            "revisions": tree_revisions,
+        })
+    return {
+        "document": document,
+        "branches": tree_branches,
+    }
+
+
+@app.post("/api/documents/{document_id}/branches")
+async def create_document_branch(document_id: str, payload: BranchCreateRequest) -> LegalDocumentBranch:
+    document = store.get("legal_documents", document_id, LegalDocument)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Branch name cannot be empty")
+    import re
+    if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_\-/]+$', name):
+        raise HTTPException(status_code=422, detail="Branch name can only contain Chinese, English letters, digits, underscores, hyphens, and slashes")
+    existing_branches = document_branches(document_id)
+    if any(branch.name == name for branch in existing_branches):
+        raise HTTPException(status_code=409, detail="Branch name already exists")
+    base_revision = store.get("legal_document_revisions", payload.base_revision_id, LegalDocumentRevision)
+    if not base_revision or base_revision.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Base revision not found")
+    branch = LegalDocumentBranch(
+        document_id=document_id,
+        name=name,
+        head_revision_id=base_revision.id,
+        base_revision_id=base_revision.id,
+        is_default=False,
+    )
+    store.add("legal_document_branches", branch)
+    record("document.branch.created", "创建文件分支", f"{document.title} - {name}", entity_type="document", entity_id=document_id)
+    return branch
 
 
 @app.get("/api/documents/{document_id}/export.docx")
@@ -1421,6 +1565,282 @@ async def export_document_docx(document_id: str) -> StreamingResponse:
     )
 
 
+# 7.9: POST /api/documents/{document_id}/branches/{branch_id}/revisions
+@app.post("/api/documents/{document_id}/branches/{branch_id}/revisions")
+async def create_branch_revision(
+    document_id: str, branch_id: str, payload: BranchRevisionCreateRequest
+) -> LegalDocumentRevision:
+    document = store.get("legal_documents", document_id, LegalDocument)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    branch = get_document_branch(document_id, branch_id)
+    if not payload.content_text.strip():
+        raise HTTPException(status_code=422, detail="Content text cannot be empty")
+    revision = create_revision_on_branch(
+        document=document,
+        branch=branch,
+        content_text=payload.content_text,
+        source_filename=payload.source_filename,
+        author_type=payload.author_type,
+        change_summary=payload.change_summary,
+    )
+    record("document.revision.created", "向分支提交新版本", document.title, entity_type="document", entity_id=document.id)
+    return revision
+
+
+# 7.10: POST /api/documents/{document_id}/branches/{branch_id}/revisions/upload
+@app.post("/api/documents/{document_id}/branches/{branch_id}/revisions/upload")
+async def upload_branch_revision(
+    document_id: str,
+    branch_id: str,
+    file: UploadFile = File(...),
+    change_summary: str = Form(default="Uploaded revision"),
+) -> LegalDocumentRevision:
+    document = store.get("legal_documents", document_id, LegalDocument)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    branch = get_document_branch(document_id, branch_id)
+    content_text = await read_legal_file_text(file)
+    if not content_text.strip():
+        raise HTTPException(status_code=422, detail="Uploaded revision has no readable text")
+    revision = create_revision_on_branch(
+        document=document,
+        branch=branch,
+        content_text=content_text,
+        source_filename=file.filename,
+        author_type="import",
+        change_summary=change_summary,
+    )
+    record("document.revision.uploaded", "向分支上传文件新版本", document.title, entity_type="document", entity_id=document.id)
+    return revision
+
+
+# 7.13: GET /api/documents/{document_id}/diff/export.docx
+@app.get("/api/documents/{document_id}/diff/export.docx")
+async def export_diff_docx(
+    document_id: str,
+    base_revision_id: str = Query(...),
+    target_revision_id: str = Query(...),
+) -> StreamingResponse:
+    from docx.shared import RGBColor
+    import re as _re
+
+    document = store.get("legal_documents", document_id, LegalDocument)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    base = store.get("legal_document_revisions", base_revision_id, LegalDocumentRevision)
+    target = store.get("legal_document_revisions", target_revision_id, LegalDocumentRevision)
+    if not base or base.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Base revision not found")
+    if not target or target.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Target revision not found")
+
+    segments = build_char_diff(base.content_text, target.content_text)
+    paragraph_changes = build_paragraph_diff(base.content_text, target.content_text)
+    risk_summary = summarize_legal_risks(base.content_text, target.content_text)
+
+    doc = DocxDocument()
+    doc.add_heading(f"{document.title} - 版本差异", level=1)
+
+    base_label = f"v{base.version_number} {base.short_hash or ''} {base.change_summary or ''}".strip()
+    target_label = f"v{target.version_number} {target.short_hash or ''} {target.change_summary or ''}".strip()
+    doc.add_paragraph(f"基准版本：{base_label}")
+    doc.add_paragraph(f"目标版本：{target_label}")
+
+    doc.add_heading("逐字差异", level=2)
+    for seg in segments:
+        para = doc.paragraphs[-1] if doc.paragraphs else doc.add_paragraph()
+        run = para.add_run(seg.text)
+        if seg.op == "insert":
+            run.font.color.rgb = RGBColor(22, 101, 52)  # green
+        elif seg.op == "delete":
+            run.font.color.rgb = RGBColor(153, 27, 27)  # red
+            run.font.strike = True
+
+    doc.add_heading("段落变化", level=2)
+    for change in paragraph_changes:
+        if change.op == "equal":
+            continue
+        para = doc.add_paragraph()
+        if change.op == "insert":
+            run = para.add_run(f"[新增] {change.target or ''}")
+            run.font.color.rgb = RGBColor(22, 101, 52)
+        elif change.op == "delete":
+            run = para.add_run(f"[删除] {change.base or ''}")
+            run.font.color.rgb = RGBColor(153, 27, 27)
+            run.font.strike = True
+        elif change.op == "replace":
+            if change.base:
+                run = para.add_run(f"原文：{change.base}")
+                run.font.color.rgb = RGBColor(153, 27, 27)
+                run.font.strike = True
+            if change.target:
+                para2 = doc.add_paragraph()
+                run2 = para2.add_run(f"改为：{change.target}")
+                run2.font.color.rgb = RGBColor(22, 101, 52)
+
+    doc.add_heading("风险提示", level=2)
+    for risk in risk_summary:
+        doc.add_paragraph(risk, style="List Bullet")
+
+    stream = BytesIO()
+    doc.save(stream)
+    stream.seek(0)
+    filename = f"legal-document-diff-{document.id}.docx"
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# 7.14: POST /api/documents/{document_id}/diff/analyze
+@app.post("/api/documents/{document_id}/diff/analyze")
+async def analyze_document_diff(
+    document_id: str, payload: dict[str, str]
+) -> LegalDocumentAnalysis:
+    from urllib.request import Request, urlopen
+    import json as _json
+
+    document = store.get("legal_documents", document_id, LegalDocument)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    base_revision_id = payload.get("base_revision_id", "")
+    target_revision_id = payload.get("target_revision_id", "")
+    base = store.get("legal_document_revisions", base_revision_id, LegalDocumentRevision)
+    target = store.get("legal_document_revisions", target_revision_id, LegalDocumentRevision)
+    if not base or base.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Base revision not found")
+    if not target or target.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Target revision not found")
+
+    # Check for cached analysis
+    existing = store.filter(
+        "legal_document_analyses",
+        LegalDocumentAnalysis,
+        document_id=document_id,
+        base_revision_id=base.id,
+        target_revision_id=target.id,
+    )
+    if existing:
+        return existing[-1]
+
+    # Generate diff data
+    segments = build_char_diff(base.content_text, target.content_text)
+    paragraph_changes = build_paragraph_diff(base.content_text, target.content_text)
+    risk_summary = summarize_legal_risks(base.content_text, target.content_text)
+
+    # Try LLM analysis
+    api_key = os.getenv("LVZHIJIE_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    base_url = (os.getenv("LVZHIJIE_LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+    model = os.getenv("LVZHIJIE_LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+
+    analysis = None
+    if api_key:
+        try:
+            changed_text = "\n".join(
+                f"{base.content_text[max(0, i1 - 12):min(len(base.content_text), i2 + 12)]}\n"
+                f"{target.content_text[max(0, j1 - 12):min(len(target.content_text), j2 + 12)]}"
+                for op, i1, i2, j1, j2 in SequenceMatcher(
+                    a=base.content_text, b=target.content_text
+                ).get_opcodes()
+                if op != "equal"
+            )[:6000]
+
+            paragraph_changes_text = "\n".join(
+                f"[{change.op}] {change.base or ''} -> {change.target or ''}"
+                for change in paragraph_changes
+                if change.op != "equal"
+            )[:3000]
+
+            prompt = f"""请分析两个法律文件版本之间的差异。
+只能输出 JSON 对象，不要输出 Markdown。
+JSON 字段必须包含：
+- risk_level: low / medium / high
+- ambiguities: 字符串数组，列出可能存在歧义的变化
+- stealth_changes: 字符串数组，列出疑似暗改、弱化责任、扩大免责、改变期限、改变争议解决方式的变化
+- risk_points: 字符串数组，列出法律风险点
+- suggestions: 字符串数组，列出修改或谈判建议
+- manual_review_checklist: 字符串数组，列出人工必须复核的问题
+
+文件标题：
+{document.title}
+
+基准版本：
+v{base.version_number} {base.change_summary}
+
+目标版本：
+v{target.version_number} {target.change_summary}
+
+段落变化：
+{paragraph_changes_text}
+
+逐字变化摘要：
+{changed_text}"""
+
+            request_body = _json.dumps({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "你是资深中国律师，专门审查合同版本差异、暗改风险和歧义条款。只能输出 JSON。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.2,
+            }).encode("utf-8")
+
+            req = Request(
+                f"{base_url}/chat/completions",
+                data=request_body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                method="POST",
+            )
+            with urlopen(req, timeout=30) as resp:
+                result = _json.loads(resp.read().decode("utf-8"))
+            content = result["choices"][0]["message"]["content"]
+            if content.startswith("```"):
+                content = _re.sub(r"^```(?:json)?\s*", "", content)
+                content = _re.sub(r"\s*```$", "", content)
+            parsed = _json.loads(content)
+            analysis = LegalDocumentAnalysis(
+                document_id=document_id,
+                base_revision_id=base.id,
+                target_revision_id=target.id,
+                source="llm",
+                risk_level=parsed.get("risk_level", "medium"),
+                ambiguities=parsed.get("ambiguities", []),
+                stealth_changes=parsed.get("stealth_changes", []),
+                risk_points=parsed.get("risk_points", []),
+                suggestions=parsed.get("suggestions", []),
+                manual_review_checklist=parsed.get("manual_review_checklist", []),
+            )
+        except Exception:
+            pass
+
+    # Rule fallback
+    if not analysis:
+        analysis = LegalDocumentAnalysis(
+            document_id=document_id,
+            base_revision_id=base.id,
+            target_revision_id=target.id,
+            source="rule_fallback",
+            risk_level="medium",
+            ambiguities=["发现文本变化，请人工核对是否影响权利义务、履行期限或争议解决。"],
+            stealth_changes=[],
+            risk_points=risk_summary,
+            suggestions=["建议逐条核对红色删除和绿色新增内容，确认是否改变双方实质权利义务。"],
+            manual_review_checklist=[
+                "核对付款金额、付款期限和付款条件是否变化。",
+                "核对违约责任、赔偿上限和免责条款是否变化。",
+                "核对解除条件、通知期限和争议解决条款是否变化。",
+            ],
+        )
+
+    store.add("legal_document_analyses", analysis)
+    return analysis
+
+
 @app.delete("/api/documents/{document_id}")
 async def delete_document(document_id: str) -> dict[str, object]:
     document = store.get("legal_documents", document_id, LegalDocument)
@@ -1436,16 +1856,22 @@ async def create_revision(document_id: str, payload: RevisionCreateRequest) -> L
     document = store.get("legal_documents", document_id, LegalDocument)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    revisions = store.filter("legal_document_revisions", LegalDocumentRevision, document_id=document_id)
-    revision = LegalDocumentRevision(
-        document_id=document_id,
-        version_number=len(revisions) + 1,
-        **payload.model_dump(),
+    branches = document_branches(document_id)
+    default_branch = next((b for b in branches if b.is_default), None)
+    if not default_branch:
+        revisions = store.filter("legal_document_revisions", LegalDocumentRevision, document_id=document_id)
+        if revisions:
+            default_branch = create_default_branch_for_document(document, sorted(revisions, key=lambda r: r.version_number)[0])
+        else:
+            raise HTTPException(status_code=404, detail="No revisions found for this document")
+    revision = create_revision_on_branch(
+        document=document,
+        branch=default_branch,
+        content_text=payload.content_text,
+        source_filename=payload.source_filename,
+        author_type=payload.author_type,
+        change_summary=payload.change_summary,
     )
-    document.current_revision_id = revision.id
-    document.updated_at = now_iso()
-    store.add("legal_document_revisions", revision)
-    store.update("legal_documents", document)
     record("document.revision.created", "创建文件新版本", document.title, entity_type="document", entity_id=document.id)
     return revision
 
@@ -1459,9 +1885,26 @@ async def delete_revision(document_id: str, revision_id: str) -> dict[str, objec
     if not revision or revision.document_id != document_id:
         raise HTTPException(status_code=404, detail="Revision not found")
 
+    # 7.11: Prevent deleting branch head revisions
+    branches = store.filter("legal_document_branches", LegalDocumentBranch, document_id=document_id)
+    if any(branch.head_revision_id == revision_id for branch in branches):
+        raise HTTPException(status_code=409, detail="Cannot delete branch head revision")
+
+    # 7.11: Prevent deleting revisions with children
+    child_revisions = store.filter(
+        "legal_document_revisions", LegalDocumentRevision, document_id=document_id, parent_revision_id=revision_id
+    )
+    if child_revisions:
+        raise HTTPException(status_code=409, detail="Cannot delete revision with children")
+
     store.delete("legal_document_revisions", revision_id)
     store.remove_where(
         "legal_document_diffs",
+        lambda row: row.get("document_id") == document_id
+        and (row.get("base_revision_id") == revision_id or row.get("target_revision_id") == revision_id),
+    )
+    store.remove_where(
+        "legal_document_analyses",
         lambda row: row.get("document_id") == document_id
         and (row.get("base_revision_id") == revision_id or row.get("target_revision_id") == revision_id),
     )
@@ -1479,6 +1922,11 @@ async def delete_revision(document_id: str, revision_id: str) -> dict[str, objec
         if item.version_number != index:
             item.version_number = index
             store.update("legal_document_revisions", item)
+    # Update default branch head if needed
+    default_branch = next((b for b in branches if b.is_default), None)
+    if default_branch and default_branch.head_revision_id == revision_id:
+        default_branch.head_revision_id = revisions[-1].id
+        store.update("legal_document_branches", default_branch)
     document.current_revision_id = revisions[-1].id
     document.updated_at = now_iso()
     store.update("legal_documents", document)
@@ -1498,19 +1946,22 @@ async def upload_revision(
     content_text = await read_legal_file_text(file)
     if not content_text.strip():
         raise HTTPException(status_code=422, detail="Uploaded revision has no readable text")
-    revisions = store.filter("legal_document_revisions", LegalDocumentRevision, document_id=document_id)
-    revision = LegalDocumentRevision(
-        document_id=document_id,
-        version_number=len(revisions) + 1,
+    branches = document_branches(document_id)
+    default_branch = next((b for b in branches if b.is_default), None)
+    if not default_branch:
+        revisions = store.filter("legal_document_revisions", LegalDocumentRevision, document_id=document_id)
+        if revisions:
+            default_branch = create_default_branch_for_document(document, sorted(revisions, key=lambda r: r.version_number)[0])
+        else:
+            raise HTTPException(status_code=404, detail="No revisions found for this document")
+    revision = create_revision_on_branch(
+        document=document,
+        branch=default_branch,
         content_text=content_text,
         source_filename=file.filename,
         author_type="import",
         change_summary=change_summary,
     )
-    document.current_revision_id = revision.id
-    document.updated_at = now_iso()
-    store.add("legal_document_revisions", revision)
-    store.update("legal_documents", document)
     record("document.revision.uploaded", "上传文件新版本", document.title, entity_type="document", entity_id=document.id)
     return revision
 
@@ -1536,8 +1987,10 @@ async def get_document_diff(
         if target_revision_id
         else revisions[-1]
     )
-    if not base or not target:
-        raise HTTPException(status_code=404, detail="Revision not found")
+    if not base or base.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Base revision not found")
+    if not target or target.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Target revision not found")
     diff = LegalDocumentDiff(
         document_id=document.id,
         base_revision_id=base.id,

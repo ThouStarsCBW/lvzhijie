@@ -138,6 +138,7 @@ export type LegalDocument = {
   title: string;
   document_type: string;
   current_revision_id?: string | null;
+  default_branch_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -150,7 +151,22 @@ export type LegalDocumentRevision = {
   source_filename?: string | null;
   author_type: "owner" | "agent" | "import";
   change_summary: string;
+  branch_id?: string | null;
+  parent_revision_id?: string | null;
+  created_from_revision_id?: string | null;
+  short_hash?: string | null;
   created_at: string;
+};
+
+export type LegalDocumentBranch = {
+  id: string;
+  document_id: string;
+  name: string;
+  head_revision_id?: string | null;
+  base_revision_id?: string | null;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
 };
 
 export type DiffSegment = {
@@ -236,5 +252,40 @@ export type ActivityEvent = {
   event_type: string;
   title: string;
   description: string;
+  created_at: string;
+};
+
+export type LegalDocumentTreeRevision = {
+  id: string;
+  label: string;
+  version_number: number;
+  short_hash?: string | null;
+  parent_revision_id?: string | null;
+  change_summary: string;
+  source_filename?: string | null;
+  created_at: string;
+};
+
+export type LegalDocumentTreeBranch = LegalDocumentBranch & {
+  revisions: LegalDocumentTreeRevision[];
+};
+
+export type LegalDocumentTree = {
+  document: LegalDocument;
+  branches: LegalDocumentTreeBranch[];
+};
+
+export type LegalDocumentAnalysis = {
+  id: string;
+  document_id: string;
+  base_revision_id: string;
+  target_revision_id: string;
+  source: "llm" | "rule_fallback";
+  risk_level: "low" | "medium" | "high";
+  ambiguities: string[];
+  stealth_changes: string[];
+  risk_points: string[];
+  suggestions: string[];
+  manual_review_checklist: string[];
   created_at: string;
 };

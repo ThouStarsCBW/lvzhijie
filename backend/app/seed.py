@@ -7,6 +7,7 @@ from app.models import (
     CaseTask,
     LegalAgent,
     LegalDocument,
+    LegalDocumentBranch,
     LegalDocumentRevision,
     LegalReplyJob,
     OpenClawConnection,
@@ -101,6 +102,12 @@ def build_seed_data() -> dict[str, object]:
         document_type="contract",
         current_revision_id="rev_demo_2",
     )
+    main_branch = LegalDocumentBranch(
+        id="branch_demo_main",
+        document_id=document.id,
+        name="main",
+        is_default=True,
+    )
     revisions = [
         LegalDocumentRevision(
             id="rev_demo_1",
@@ -109,6 +116,10 @@ def build_seed_data() -> dict[str, object]:
             content_text="甲方应在验收后7日内支付服务费。违约金按每日万分之三计算。",
             source_filename="contract-v1.txt",
             change_summary="初始版本",
+            branch_id=main_branch.id,
+            parent_revision_id=None,
+            created_from_revision_id=None,
+            short_hash="rev_dem",
         ),
         LegalDocumentRevision(
             id="rev_demo_2",
@@ -117,8 +128,15 @@ def build_seed_data() -> dict[str, object]:
             content_text="甲方应在验收后30日内支付服务费。违约金按每日万分之一计算，累计不超过合同金额10%。",
             source_filename="contract-v2.txt",
             change_summary="付款期限和违约责任调整",
+            branch_id=main_branch.id,
+            parent_revision_id="rev_demo_1",
+            created_from_revision_id="rev_demo_1",
+            short_hash="rev_dem",
         ),
     ]
+    main_branch.base_revision_id = revisions[0].id
+    main_branch.head_revision_id = revisions[-1].id
+    document.default_branch_id = main_branch.id
     agents = [
         LegalAgent(
             role="dispatch_agent",
@@ -286,7 +304,9 @@ def build_seed_data() -> dict[str, object]:
         "legal_agents": [agent.model_dump() for agent in agents],
         "legal_documents": [document.model_dump()],
         "legal_document_revisions": [revision.model_dump() for revision in revisions],
+        "legal_document_branches": [main_branch.model_dump()],
         "legal_document_diffs": [],
+        "legal_document_analyses": [],
         "legal_reasoning_runs": [],
         "follow_up_questions": [],
         "reply_jobs": [job.model_dump() for job in reply_jobs],

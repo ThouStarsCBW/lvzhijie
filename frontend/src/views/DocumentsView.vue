@@ -1,188 +1,136 @@
 <template>
-  <PageHeader title="法律文件" description="法律文件类版本控制，支持上传、版本历史、逐字差异和风险摘要。">
+  <PageHeader title="法律文件" description="文件库管理，支持上传、版本控制和法律风险分析。">
     <button class="button primary" @click="createSample">新建双版本示例</button>
   </PageHeader>
-  <section class="page-content">
-    <div class="split">
-      <section class="panel">
-        <h2 class="panel-title">文件库</h2>
-        <p class="panel-subtitle">第一阶段支持文本和文档转文本后的版本比较。</p>
-        <input v-model="uploadTitle" class="input" placeholder="上传文件标题，可留空" />
-        <select v-model="uploadType" class="select" style="margin-top: 10px">
-          <option value="contract">合同</option>
-          <option value="letter">函件</option>
-          <option value="pleading">文书</option>
-          <option value="evidence">证据</option>
-          <option value="other">其他</option>
-        </select>
-        <input class="input file-input" type="file" accept=".txt,.md,.docx" @change="pickUpload" />
-        <button class="button" style="margin: 10px 0 16px" :disabled="!uploadFile" @click="uploadDocument">
-          上传为新文件
-        </button>
 
-        <div
-          v-for="document in documents"
-          :key="document.id"
-          :class="['list-item', 'item-with-action', selectedId === document.id && 'active']"
-        >
-          <button class="list-item-main" @click="select(document.id)">
-            <strong>{{ document.title }}</strong>
-            <div class="muted small">{{ documentTypeLabel(document.document_type) }}</div>
+  <section class="page-content">
+    <div class="documents-list-container">
+      <!-- 上传新文件库 -->
+      <section class="panel upload-panel">
+        <h2 class="panel-title">上传新文件库</h2>
+        <p class="panel-subtitle">支持 .txt、.md、.docx 文件。</p>
+        <div class="upload-form">
+          <input v-model="uploadTitle" class="input" placeholder="文件标题，可留空" />
+          <select v-model="uploadType" class="select" style="margin-top: 10px">
+            <option value="contract">合同</option>
+            <option value="letter">函件</option>
+            <option value="pleading">文书</option>
+            <option value="evidence">证据</option>
+            <option value="other">其他</option>
+          </select>
+          <input class="input file-input" type="file" accept=".txt,.md,.docx" @change="pickUpload" />
+          <button class="button" style="margin: 10px 0 16px" :disabled="!uploadFile" @click="uploadDocument">
+            上传为新文件库
           </button>
-          <button class="button danger" :disabled="deletingId === document.id" @click="deleteDocument(document.id)">
-            {{ deletingId === document.id ? "删除中" : confirmingId === document.id ? "确认删除" : "删除" }}
-          </button>
-          <button v-if="confirmingId === document.id" class="button" @click="confirmingId = ''">取消</button>
         </div>
       </section>
 
+      <!-- 文件库列表 -->
       <section class="panel">
-        <div class="detail-header">
-          <div>
-            <h2 class="panel-title">版本差异</h2>
-            <p class="panel-subtitle">红色为删除，绿色为新增。</p>
-          </div>
-          <div v-if="detail" class="row-actions">
-            <Badge tone="blue">{{ detail.revisions.length }} 个版本</Badge>
-            <a class="button" :href="api.documentExportUrl(detail.document.id)">导出 Word</a>
-          </div>
-        </div>
-
-        <section v-if="detail" class="version-tools">
-          <div class="item-grid">
-            <article v-for="revision in detail.revisions" :key="revision.id" class="list-item item-with-action">
-              <div>
-                <strong>v{{ revision.version_number }}</strong>
-                <div class="muted small">
-                  {{ revision.source_filename || "手动录入" }} · {{ authorLabel(revision.author_type) }}
-                </div>
-                <div class="muted small">{{ revision.change_summary }}</div>
+        <h2 class="panel-title">文件库列表</h2>
+        <p class="panel-subtitle">点击文件库进入详情页面。</p>
+        
+        <div v-if="loading" class="empty-state">加载中...</div>
+        <div v-else-if="documents.length === 0" class="empty-state">暂无文件库，请上传文件创建。</div>
+        
+        <div v-else class="documents-grid">
+          <div
+            v-for="document in documents"
+            :key="document.id"
+            class="document-card"
+            @click="goToDetail(document.id)"
+          >
+            <div class="document-card-header">
+              <div class="document-icon">
+                <FileText class="icon" />
               </div>
-              <button class="button danger" :disabled="deletingId === revision.id" @click="deleteRevision(revision.id)">
-                {{ deletingId === revision.id ? "删除中" : confirmingId === revision.id ? "确认删除" : "删除" }}
+              <div class="document-info">
+                <h3 class="document-title">{{ document.title }}</h3>
+                <div class="document-meta">
+                  <span class="document-type">{{ documentTypeLabel(document.document_type) }}</span>
+                  <span class="document-date">{{ formatDate(document.updated_at) }}</span>
+                </div>
+              </div>
+              <button 
+                class="button danger small" 
+                @click.stop="deleteDocument(document.id)"
+                :disabled="deletingId === document.id"
+              >
+                {{ deletingId === document.id ? "删除中" : confirmingId === document.id ? "确认删除" : "删除" }}
               </button>
-              <button v-if="confirmingId === revision.id" class="button" @click="confirmingId = ''">取消</button>
-            </article>
-          </div>
-          <textarea v-model="revisionText" class="textarea" placeholder="粘贴新版本文本" />
-          <input class="input file-input" type="file" accept=".txt,.md,.docx" @change="pickRevisionUpload" />
-          <div class="form-actions">
-            <button class="button" :disabled="!revisionText.trim()" @click="createTextRevision">新增文本版本</button>
-            <button class="button" :disabled="!revisionFile" @click="uploadRevision">上传新版本</button>
-          </div>
-          <div v-if="detail.revisions.length > 1" class="compare-row">
-            <label>
-              <span class="small muted">基准版本</span>
-              <select v-model="baseRevisionId" class="select" @change="reloadDiff">
-                <option v-for="revision in detail.revisions" :key="revision.id" :value="revision.id">
-                  v{{ revision.version_number }} {{ revision.change_summary }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span class="small muted">目标版本</span>
-              <select v-model="targetRevisionId" class="select" @change="reloadDiff">
-                <option v-for="revision in detail.revisions" :key="revision.id" :value="revision.id">
-                  v{{ revision.version_number }} {{ revision.change_summary }}
-                </option>
-              </select>
-            </label>
-          </div>
-        </section>
-
-        <div v-if="diff">
-          <div class="diff">
-            <span
-              v-for="(segment, index) in diff.segments"
-              :key="index"
-              :class="segment.op === 'insert' ? 'diff-insert' : segment.op === 'delete' ? 'diff-delete' : ''"
-            >{{ segment.text }}</span>
-          </div>
-          <section class="plain-section">
-            <h3 class="panel-title">段落变化</h3>
-            <div v-for="(change, index) in diff.paragraph_changes" :key="index" class="paragraph-change">
-              <Badge :tone="change.op === 'insert' ? 'green' : change.op === 'delete' ? 'red' : change.op === 'replace' ? 'amber' : 'slate'">
-                {{ changeOpLabel(change.op) }}
-              </Badge>
-              <div class="muted small">{{ change.base || change.target }}</div>
+              <button 
+                v-if="confirmingId === document.id" 
+                class="button small" 
+                @click.stop="confirmingId = ''"
+              >
+                取消
+              </button>
             </div>
-          </section>
-          <section class="plain-section">
-            <h3 class="panel-title">风险提示</h3>
-            <ul>
-              <li v-for="risk in diff.risk_summary" :key="risk">{{ risk }}</li>
-            </ul>
-          </section>
+            <div class="document-card-footer">
+              <div class="document-stats">
+                <span class="stat">
+                  <GitBranch class="icon" />
+                  {{ documentStats[document.id]?.branches || 0 }} 分支
+                </span>
+                <span class="stat">
+                  <Clock class="icon" />
+                  {{ documentStats[document.id]?.revisions || 0 }} 版本
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
-        <div v-else class="empty-state">请选择至少包含两个版本的文件。</div>
       </section>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { ref, onMounted, computed } from "vue";
+import { useRouter } from "vue-router";
+import { FileText, GitBranch, Clock } from "lucide-vue-next";
 
-import Badge from "@/components/Badge.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import { api } from "@/services/api";
-import type { LegalDocument, LegalDocumentDiff, LegalDocumentRevision } from "@/types";
+import type { LegalDocument } from "@/types";
 
+const router = useRouter();
 const documents = ref<LegalDocument[]>([]);
-const selectedId = ref("");
-const detail = ref<{ document: LegalDocument; revisions: LegalDocumentRevision[] } | null>(null);
-const diff = ref<LegalDocumentDiff | null>(null);
+const loading = ref(true);
 const uploadTitle = ref("");
 const uploadType = ref("contract");
 const uploadFile = ref<File | null>(null);
-const revisionText = ref("");
-const revisionFile = ref<File | null>(null);
 const deletingId = ref("");
 const confirmingId = ref("");
-const baseRevisionId = ref("");
-const targetRevisionId = ref("");
+
+// 存储每个文档的统计信息
+const documentStats = ref<Record<string, { branches: number; revisions: number }>>({});
 
 async function load() {
-  documents.value = await api.documents();
-  if (!selectedId.value && documents.value[0]) {
-    await select(documents.value[0].id);
-  } else if (selectedId.value && !documents.value.some((item) => item.id === selectedId.value)) {
-    selectedId.value = "";
-    detail.value = null;
-    diff.value = null;
-    if (documents.value[0]) await select(documents.value[0].id);
+  loading.value = true;
+  try {
+    documents.value = await api.documents();
+    // 并行加载每个文档的统计信息
+    await Promise.all(documents.value.map(async (doc) => {
+      try {
+        const tree = await api.documentTree(doc.id);
+        const totalRevisions = tree.branches.reduce((sum, branch) => sum + branch.revisions.length, 0);
+        documentStats.value[doc.id] = {
+          branches: tree.branches.length,
+          revisions: totalRevisions,
+        };
+      } catch {
+        documentStats.value[doc.id] = { branches: 0, revisions: 0 };
+      }
+    }));
+  } finally {
+    loading.value = false;
   }
-}
-
-async function select(id: string) {
-  selectedId.value = id;
-  detail.value = await api.documentDetail(id);
-  const revisions = detail.value.revisions;
-  baseRevisionId.value = revisions.length > 1 ? revisions[revisions.length - 2].id : "";
-  targetRevisionId.value = revisions.length ? revisions[revisions.length - 1].id : "";
-  await reloadDiff();
-}
-
-async function reloadDiff() {
-  if (!selectedId.value || !detail.value || detail.value.revisions.length < 2) {
-    diff.value = null;
-    return;
-  }
-  if (baseRevisionId.value === targetRevisionId.value) {
-    diff.value = null;
-    return;
-  }
-  diff.value = await api.documentDiff(selectedId.value, baseRevisionId.value, targetRevisionId.value);
 }
 
 function pickUpload(event: Event) {
   const input = event.target as HTMLInputElement;
   uploadFile.value = input.files?.[0] ?? null;
-}
-
-function pickRevisionUpload(event: Event) {
-  const input = event.target as HTMLInputElement;
-  revisionFile.value = input.files?.[0] ?? null;
 }
 
 async function uploadDocument() {
@@ -196,75 +144,28 @@ async function uploadDocument() {
   uploadFile.value = null;
   uploadTitle.value = "";
   await load();
-  await select(document.id);
+  // 跳转到新创建的文件库详情
+  goToDetail(document.id);
 }
 
-async function createTextRevision() {
-  if (!selectedId.value || !revisionText.value.trim()) return;
-  await api.createRevision(selectedId.value, {
-    content_text: revisionText.value.trim(),
-    change_summary: "手动粘贴新版本",
-  });
-  revisionText.value = "";
-  await select(selectedId.value);
-}
-
-async function uploadRevision() {
-  if (!selectedId.value || !revisionFile.value) return;
-  const form = new FormData();
-  form.append("file", revisionFile.value);
-  form.append("change_summary", "上传新版本");
-  await api.uploadRevision(selectedId.value, form);
-  revisionFile.value = null;
-  await select(selectedId.value);
-}
-
-async function withDelete(id: string, action: () => Promise<void>) {
-  deletingId.value = id;
-  try {
-    await action();
-    confirmingId.value = "";
-  } finally {
-    deletingId.value = "";
-  }
-}
-
-function armDelete(id: string) {
-  if (confirmingId.value !== id) {
-    confirmingId.value = id;
-    return false;
-  }
-  return true;
+function goToDetail(documentId: string) {
+  router.push(`/documents/${documentId}`);
 }
 
 async function deleteDocument(documentId: string) {
-  if (!armDelete(documentId)) return;
-  await withDelete(documentId, async () => {
+  if (confirmingId.value !== documentId) {
+    confirmingId.value = documentId;
+    return;
+  }
+  
+  deletingId.value = documentId;
+  try {
     await api.deleteDocument(documentId);
-    if (selectedId.value === documentId) {
-      selectedId.value = "";
-      detail.value = null;
-      diff.value = null;
-    }
+    confirmingId.value = "";
     await load();
-  });
-}
-
-async function deleteRevision(revisionId: string) {
-  if (!selectedId.value || !armDelete(revisionId)) return;
-  await withDelete(revisionId, async () => {
-    const documentId = selectedId.value;
-    const result = await api.deleteRevision(documentId, revisionId);
-    await load();
-    if (Boolean(result.deleted_document)) {
-      selectedId.value = "";
-      detail.value = null;
-      diff.value = null;
-      await load();
-    } else if (selectedId.value) {
-      await select(selectedId.value);
-    }
-  });
+  } finally {
+    deletingId.value = "";
+  }
 }
 
 async function createSample() {
@@ -279,35 +180,153 @@ async function createSample() {
     change_summary: "付款期限和违约责任调整",
   });
   await load();
-  await select(document.id);
+  goToDetail(document.id);
 }
 
 function documentTypeLabel(type: string) {
-  return {
-    contract: "合同",
-    letter: "函件",
-    pleading: "文书",
-    evidence: "证据",
-    other: "其他",
-  }[type] ?? type;
+  return { contract: "合同", letter: "函件", pleading: "文书", evidence: "证据", other: "其他" }[type] ?? type;
 }
 
-function authorLabel(type: string) {
-  return {
-    owner: "人工录入",
-    agent: "智能体生成",
-    import: "文件导入",
-  }[type] ?? type;
-}
-
-function changeOpLabel(op: string) {
-  return {
-    insert: "新增",
-    delete: "删除",
-    replace: "替换",
-    equal: "未变更",
-  }[op] ?? op;
+function formatDate(dateStr: string) {
+  try {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
+  } catch {
+    return "";
+  }
 }
 
 onMounted(load);
 </script>
+
+<style scoped>
+.documents-list-container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.upload-panel {
+  margin-bottom: 20px;
+}
+
+.upload-form {
+  display: grid;
+  gap: 10px;
+  max-width: 400px;
+}
+
+.documents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.document-card {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.document-card:hover {
+  border-color: var(--blue);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
+  transform: translateY(-2px);
+}
+
+.document-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.document-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--blue-soft);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.document-icon .icon {
+  width: 20px;
+  height: 20px;
+  color: var(--blue);
+}
+
+.document-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.document-title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.document-type {
+  background: var(--surface-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.document-date {
+  font-size: 11px;
+}
+
+.document-card-footer {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.document-stats {
+  display: flex;
+  gap: 16px;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stat .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.button.small {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--muted);
+  font-size: 14px;
+}
+</style>

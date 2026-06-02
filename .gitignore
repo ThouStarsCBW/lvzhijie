@@ -5,4 +5,4 @@ node_modules/
 dist/
 .env
 backend/app/data/store.json
-
+backend/app/data/

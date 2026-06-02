@@ -7,8 +7,11 @@ import type {
   FollowUpQuestion,
   LegalAgent,
   LegalDocument,
+  LegalDocumentAnalysis,
+  LegalDocumentBranch,
   LegalDocumentDiff,
   LegalDocumentRevision,
+  LegalDocumentTree,
   LegalReplyJob,
   LegalReasoningRun,
   OpenClawConnection,
@@ -194,7 +197,7 @@ export const api = {
       body: form,
     }),
   documentDetail: (documentId: string) =>
-    request<{ document: LegalDocument; revisions: LegalDocumentRevision[] }>(
+    request<{ document: LegalDocument; branches: LegalDocumentBranch[]; revisions: LegalDocumentRevision[] }>(
       `/api/documents/${documentId}`,
     ),
   deleteDocument: (documentId: string) =>
@@ -223,6 +226,48 @@ export const api = {
     return request<LegalDocumentDiff>(`/api/documents/${documentId}/diff${suffix}`);
   },
   documentExportUrl: (documentId: string) => `${API_BASE}/api/documents/${documentId}/export.docx`,
+
+  documentTree: (documentId: string) =>
+    request<LegalDocumentTree>(`/api/documents/${documentId}/tree`),
+
+  createDocumentBranch: (documentId: string, payload: { name: string; base_revision_id: string }) =>
+    request<LegalDocumentBranch>(`/api/documents/${documentId}/branches`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  createBranchRevision: (
+    documentId: string,
+    branchId: string,
+    payload: { content_text: string; change_summary?: string; source_filename?: string | null },
+  ) =>
+    request<LegalDocumentRevision>(`/api/documents/${documentId}/branches/${branchId}/revisions`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  uploadBranchRevision: (documentId: string, branchId: string, form: FormData) =>
+    request<LegalDocumentRevision>(`/api/documents/${documentId}/branches/${branchId}/revisions/upload`, {
+      method: "POST",
+      body: form,
+    }),
+
+  analyzeDocumentDiff: (
+    documentId: string,
+    payload: { base_revision_id: string; target_revision_id: string },
+  ) =>
+    request<LegalDocumentAnalysis>(`/api/documents/${documentId}/diff/analyze`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  documentDiffExportUrl: (documentId: string, baseRevisionId: string, targetRevisionId: string) => {
+    const params = new URLSearchParams({
+      base_revision_id: baseRevisionId,
+      target_revision_id: targetRevisionId,
+    });
+    return `${API_BASE}/api/documents/${documentId}/diff/export.docx?${params.toString()}`;
+  },
 
   generateReasoning: (caseId: string) =>
     request<LegalReasoningRun>(`/api/reasoning/cases/${caseId}/generate`, {

@@ -193,6 +193,7 @@ class LegalDocument(BaseModel):
     title: str
     document_type: Literal["contract", "letter", "pleading", "evidence", "other"] = "other"
     current_revision_id: str | None = None
+    default_branch_id: str | None = None
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
 
@@ -205,6 +206,36 @@ class LegalDocumentRevision(BaseModel):
     source_filename: str | None = None
     author_type: Literal["owner", "agent", "import"] = "owner"
     change_summary: str = ""
+    branch_id: str | None = None
+    parent_revision_id: str | None = None
+    created_from_revision_id: str | None = None
+    short_hash: str | None = None
+    created_at: str = Field(default_factory=now_iso)
+
+
+class LegalDocumentBranch(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("branch"))
+    document_id: str
+    name: str
+    head_revision_id: str | None = None
+    base_revision_id: str | None = None
+    is_default: bool = False
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
+
+
+class LegalDocumentAnalysis(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("analysis"))
+    document_id: str
+    base_revision_id: str
+    target_revision_id: str
+    source: Literal["llm", "rule_fallback"] = "rule_fallback"
+    risk_level: Literal["low", "medium", "high"] = "medium"
+    ambiguities: list[str] = Field(default_factory=list)
+    stealth_changes: list[str] = Field(default_factory=list)
+    risk_points: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+    manual_review_checklist: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -350,6 +381,18 @@ class DocumentCreateRequest(BaseModel):
 
 
 class RevisionCreateRequest(BaseModel):
+    content_text: str
+    source_filename: str | None = None
+    author_type: LegalDocumentRevision.model_fields["author_type"].annotation = "owner"
+    change_summary: str = ""
+
+
+class BranchCreateRequest(BaseModel):
+    name: str
+    base_revision_id: str
+
+
+class BranchRevisionCreateRequest(BaseModel):
     content_text: str
     source_filename: str | None = None
     author_type: LegalDocumentRevision.model_fields["author_type"].annotation = "owner"

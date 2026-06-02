@@ -64,7 +64,7 @@ const overview = [
 
 const core = [
   { to: "/wechat", label: "客户咨询", icon: MessageCircle, match: ["/wechat"] },
-  { to: "/documents", label: "文件版本控制", icon: FileDiff, match: ["/documents"] },
+  { to: "/documents", label: "文件版本控制", icon: FileDiff, match: ["/documents$"] },
   { to: "/cases", label: "案件与推理", icon: Scale, match: ["/cases", "/reasoning"] },
   { to: "/agents", label: "律所智能体", icon: Bot, match: ["/agents"] },
 ];
@@ -75,6 +75,14 @@ const system = [
 ];
 
 function isActive(item: { match: string[] }) {
-  return item.match.some((path) => route.path === path || route.path.startsWith(`${path}/`));
+  return item.match.some((pattern) => {
+    if (pattern.endsWith("$")) {
+      // 精确匹配模式
+      const exactPath = pattern.slice(0, -1);
+      return route.path === exactPath;
+    }
+    // 普通匹配模式
+    return route.path === pattern || route.path.startsWith(`${pattern}/`);
+  });
 }
 </script>

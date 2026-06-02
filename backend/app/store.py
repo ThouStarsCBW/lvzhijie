@@ -6,6 +6,7 @@ from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel
 
+from app.models import LegalDocument, LegalDocumentBranch, LegalDocumentRevision, new_id
 from app.seed import build_seed_data
 
 T = TypeVar("T", bound=BaseModel)
@@ -36,6 +37,14 @@ class JsonStore:
                 self.data[key] = value
                 changed = True
 
+        # Ensure new tables exist
+        if "legal_document_branches" not in self.data:
+            self.data["legal_document_branches"] = []
+            changed = True
+        if "legal_document_analyses" not in self.data:
+            self.data["legal_document_analyses"] = []
+            changed = True
+
         existing_agent_roles = {
             item.get("role")
             for item in self.data.get("legal_agents", [])
@@ -61,6 +70,55 @@ class JsonStore:
             if isinstance(agent, dict) and agent.get("role") not in existing_agent_roles:
                 self.data.setdefault("legal_agents", []).append(agent)
                 existing_agent_roles.add(agent.get("role"))
+                changed = True
+
+        # Migrate existing documents to branch structure
+        for doc_data in self.data.get("legal_documents", []):
+            if not isinstance(doc_data, dict):
+                continue
+            if not doc_data.get("default_branch_id"):
+                # Create main branch for this document
+                doc_id = doc_data.get("id")
+                if not doc_id:
+                    continue
+                
+                # Find all revisions for this document
+                revisions = [
+                    rev for rev in self.data.get("legal_document_revisions", [])
+                    if isinstance(rev, dict) and rev.get("document_id") == doc_id
+                ]
+                revisions.sort(key=lambda x: x.get("version_number", 0))
+                
+                # Create main branch
+                main_branch_id = new_id("branch")
+                main_branch = {
+                    "id": main_branch_id,
+                    "document_id": doc_id,
+                    "name": "main",
+                    "head_revision_id": revisions[-1]["id"] if revisions else None,
+                    "base_revision_id": revisions[0]["id"] if revisions else None,
+                    "is_default": True,
+                    "created_at": doc_data.get("created_at", ""),
+                    "updated_at": doc_data.get("updated_at", ""),
+                }
+                self.data.setdefault("legal_document_branches", []).append(main_branch)
+                
+                # Update document
+                doc_data["default_branch_id"] = main_branch_id
+                if revisions:
+                    doc_data["current_revision_id"] = revisions[-1]["id"]
+                
+                # Update revisions
+                for i, rev in enumerate(revisions):
+                    if not rev.get("branch_id"):
+                        rev["branch_id"] = main_branch_id
+                    if not rev.get("parent_revision_id"):
+                        rev["parent_revision_id"] = revisions[i-1]["id"] if i > 0 else None
+                    if not rev.get("created_from_revision_id"):
+                        rev["created_from_revision_id"] = revisions[i-1]["id"] if i > 0 else None
+                    if not rev.get("short_hash"):
+                        rev["short_hash"] = rev["id"].replace("rev_", "")[:7]
+                
                 changed = True
 
         if changed:
