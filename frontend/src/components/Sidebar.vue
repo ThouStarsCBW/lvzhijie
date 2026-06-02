@@ -63,7 +63,7 @@ const overview = [
 ];
 
 const core = [
-  { to: "/wechat", label: "微信接入", icon: MessageCircle, match: ["/wechat"] },
+  { to: "/wechat", label: "客户咨询", icon: MessageCircle, match: ["/wechat"] },
   { to: "/documents", label: "文件版本控制", icon: FileDiff, match: ["/documents"] },
   { to: "/cases", label: "案件与推理", icon: Scale, match: ["/cases", "/reasoning"] },
   { to: "/agents", label: "律所智能体", icon: Bot, match: ["/agents"] },

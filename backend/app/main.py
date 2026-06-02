@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
+import os
 from io import BytesIO
 from pathlib import Path
+from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from docx import Document as DocxDocument
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -100,6 +105,28 @@ def delete_document_rows(document_id: str) -> None:
     store.delete("legal_documents", document_id)
 
 
+def delete_wechat_conversation_rows(conversation: WechatConversation) -> dict[str, object]:
+    removed_messages = store.remove_where(
+        "wechat_messages",
+        lambda row: row.get("conversation_id") == conversation.id,
+    )
+    for case in store.list("cases", Case):
+        if case.conversation_ref == conversation.id or case.id == conversation.case_id:
+            case.conversation_ref = None
+            case.wechat_contact_ref = None
+            case.updated_at = now_iso()
+            store.update("cases", case)
+    deleted = store.delete("wechat_conversations", conversation.id)
+    remaining_contact_refs = {
+        item.get("contact_id")
+        for item in store.data.get("wechat_conversations", [])
+        if isinstance(item, dict)
+    }
+    if conversation.contact_id not in remaining_contact_refs:
+        store.delete("wechat_contacts", conversation.contact_id)
+    return {"deleted": deleted, "messages": removed_messages}
+
+
 async def read_legal_file_text(upload: UploadFile) -> str:
     filename = upload.filename or "upload.txt"
     suffix = Path(filename).suffix.lower()
@@ -145,6 +172,19 @@ CASE_RULE_HINTS = {
     "real_estate": "重点核对合同、产权状态、付款节点、交付验收和违约责任。",
     "criminal": "重点核对涉嫌罪名、行为事实、主观状态、证据来源和程序节点。",
     "other": "重点核对法律关系、请求基础、证据来源、时效和可执行路径。",
+}
+
+CASE_TYPE_VALUES = set(CASE_TYPE_LABELS)
+
+CASE_TYPE_KEYWORDS = {
+    "labor": ["工资", "劳动", "入职", "离职", "公司拖欠", "仲裁", "社保", "工伤", "解除"],
+    "contract": ["合同", "违约", "履行", "验收", "定金", "条款", "付款期限"],
+    "debt": ["借款", "欠款", "还钱", "转账", "债务", "借条", "催收"],
+    "marriage": ["离婚", "抚养", "夫妻", "婚姻", "财产分割", "继承"],
+    "traffic": ["交通事故", "追尾", "保险", "交警", "责任认定", "伤残"],
+    "company": ["股东", "公司", "股权", "合伙", "章程", "分红", "决议"],
+    "real_estate": ["房屋", "房产", "买房", "租房", "物业", "交房", "产权"],
+    "criminal": ["刑事", "拘留", "取保", "立案", "诈骗", "寻衅滋事", "派出所"],
 }
 
 CORE_DEPARTMENTS = [
@@ -266,6 +306,196 @@ def first_sentence(value: str, fallback: str = "暂未形成摘要。") -> str:
         if marker in text:
             return text.split(marker, 1)[0] + marker
     return text[:120]
+
+
+def message_plaintext(message: WechatMessage) -> str:
+    attachment_names = "、".join(attachment.name for attachment in message.attachments)
+    content = message.content.strip()
+    if attachment_names:
+        return f"{content} [附件：{attachment_names}]" if content else f"[附件：{attachment_names}]"
+    return content
+
+
+def build_conversation_transcript(messages: list[WechatMessage]) -> str:
+    sender_labels = {
+        "wechat_user": "客户",
+        "openclaw_auto": "微信桥自动回复",
+        "owner": "我方",
+        "system": "系统",
+    }
+    lines = []
+    for message in messages:
+        text = message_plaintext(message).strip()
+        if not text:
+            continue
+        sender = sender_labels.get(message.sender, message.sender)
+        lines.append(f"{message.created_at} {sender}：{text}")
+    return "\n".join(lines)
+
+
+def infer_case_type_from_text(text: str) -> str:
+    scores: dict[str, int] = {}
+    for case_type, keywords in CASE_TYPE_KEYWORDS.items():
+        scores[case_type] = sum(1 for keyword in keywords if keyword in text)
+    best_type, best_score = max(scores.items(), key=lambda item: item[1])
+    return best_type if best_score > 0 else "other"
+
+
+def fallback_case_analysis(
+    *,
+    contact: WechatContact | None,
+    messages: list[WechatMessage],
+    requested_title: str | None = None,
+    requested_case_type: str | None = None,
+) -> dict[str, object]:
+    message_texts = [message_plaintext(message) for message in messages if message_plaintext(message).strip()]
+    inbound_texts = [
+        message_plaintext(message)
+        for message in messages
+        if message.direction == "inbound" and message_plaintext(message).strip()
+    ]
+    transcript_text = " ".join(message_texts)
+    inferred_type = requested_case_type if requested_case_type in CASE_TYPE_VALUES else infer_case_type_from_text(transcript_text)
+    display_name = contact.display_name if contact else "微信用户"
+    title = requested_title or f"{display_name}{case_type_label(inferred_type)}咨询"
+    summary_source = " ".join(inbound_texts or message_texts)
+    facts = [text[:160] for text in inbound_texts[:5]]
+    evidences = []
+    for message in messages:
+        for attachment in message.attachments:
+            evidences.append(f"客户或我方上传附件：{attachment.name}")
+    uncertainties = [
+        "需进一步确认关键时间节点、证据来源和客户的最终处理目标。",
+        f"需按{case_type_label(inferred_type)}方向核对请求基础、时效和可证明材料。",
+    ]
+    return {
+        "title": title[:80],
+        "case_type": inferred_type,
+        "summary": first_sentence(summary_source, "由微信会话创建，暂未形成充分案情摘要。")[:500],
+        "facts": facts or ["已从微信会话创建案件，需继续补充事实。"],
+        "evidence": evidences,
+        "uncertainties": uncertainties,
+        "suggested_tasks": [
+            "整理完整时间线",
+            "核对证据材料",
+            "明确客户诉求和处理路径",
+        ],
+    }
+
+
+def extract_json_object(text: str) -> dict[str, Any] | None:
+    value = text.strip()
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+    start = value.find("{")
+    end = value.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(value[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def normalize_case_analysis(raw: dict[str, Any], fallback: dict[str, object]) -> dict[str, object]:
+    case_type = str(raw.get("case_type") or fallback["case_type"])
+    if case_type not in CASE_TYPE_VALUES:
+        case_type = str(fallback["case_type"])
+
+    def string_list(key: str, fallback_key: str) -> list[str]:
+        value = raw.get(key)
+        if isinstance(value, list):
+            items = [str(item).strip() for item in value if str(item).strip()]
+            return items[:8]
+        return list(fallback.get(fallback_key, []))[:8]  # type: ignore[arg-type]
+
+    return {
+        "title": (str(raw.get("title") or fallback["title"]).strip() or str(fallback["title"]))[:80],
+        "case_type": case_type,
+        "summary": (str(raw.get("summary") or fallback["summary"]).strip() or str(fallback["summary"]))[:800],
+        "facts": string_list("facts", "facts"),
+        "evidence": string_list("evidence", "evidence"),
+        "uncertainties": string_list("uncertainties", "uncertainties"),
+        "suggested_tasks": string_list("suggested_tasks", "suggested_tasks"),
+    }
+
+
+async def analyze_conversation_for_case(
+    *,
+    contact: WechatContact | None,
+    messages: list[WechatMessage],
+    requested_title: str | None,
+    requested_case_type: str | None,
+) -> dict[str, object]:
+    fallback = fallback_case_analysis(
+        contact=contact,
+        messages=messages,
+        requested_title=requested_title,
+        requested_case_type=requested_case_type,
+    )
+    api_key = os.getenv("LVZHIJIE_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return fallback
+
+    transcript = build_conversation_transcript(messages)
+    if not transcript:
+        return fallback
+    base_url = (os.getenv("LVZHIJIE_LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+    model = os.getenv("LVZHIJIE_LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+    prompt = f"""请根据以下微信咨询聊天记录，生成一份案件建档 JSON。
+只能输出 JSON 对象，不要输出 Markdown。
+JSON 字段必须包含：
+- title: 80字以内案件标题
+- case_type: 只能是 contract, labor, marriage, debt, traffic, company, real_estate, criminal, other 之一
+- summary: 300字以内案件摘要
+- facts: 已掌握事实数组
+- evidence: 证据或附件数组
+- uncertainties: 仍需追问或核验的不确定点数组
+- suggested_tasks: 后续办理任务数组
+
+联系人：{contact.display_name if contact else "微信用户"}
+聊天记录：
+{transcript[:12000]}
+"""
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "你是律所案件接待助手，负责把客户微信咨询整理为结构化案件建档信息。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+    }
+    request = Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=25) as response:
+            body = response.read().decode("utf-8")
+    except (OSError, URLError, TimeoutError):
+        return fallback
+    parsed_response = extract_json_object(body)
+    choices = parsed_response.get("choices") if parsed_response else None
+    content = ""
+    if isinstance(choices, list) and choices:
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if isinstance(message, dict):
+            content = str(message.get("content") or "")
+    raw_analysis = extract_json_object(content)
+    if raw_analysis is None:
+        return fallback
+    return normalize_case_analysis(raw_analysis, fallback)
 
 
 def latest_document_revision(document_id: str) -> LegalDocumentRevision | None:
@@ -661,6 +891,25 @@ async def get_wechat_messages(conversation_id: str) -> list[WechatMessage]:
     )
 
 
+@app.delete("/api/wechat/conversations/{conversation_id}")
+async def delete_wechat_conversation(conversation_id: str) -> dict[str, object]:
+    sync_mock_wechat_if_needed()
+    conversation = store.get("wechat_conversations", conversation_id, WechatConversation)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if using_mock_wechat():
+        mock_wechat.delete_conversation(conversation_id)
+    result = delete_wechat_conversation_rows(conversation)
+    record(
+        "wechat.conversation.deleted",
+        "删除微信会话",
+        conversation.openclaw_conversation_id,
+        entity_type="conversation",
+        entity_id=conversation_id,
+    )
+    return {"ok": True, **result}
+
+
 @app.post("/api/wechat/conversations/{conversation_id}/send")
 async def send_wechat_message(conversation_id: str, payload: SendMessageRequest) -> WechatMessage:
     conversation = store.get("wechat_conversations", conversation_id, WechatConversation)
@@ -714,23 +963,63 @@ async def create_case_from_conversation(
     conversation_id: str,
     payload: CreateCaseFromConversationRequest,
 ) -> Case:
+    sync_mock_wechat_if_needed()
     conversation = store.get("wechat_conversations", conversation_id, WechatConversation)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if conversation.case_id:
+        existing_case = store.get("cases", conversation.case_id, Case)
+        if existing_case:
+            return existing_case
     contact = store.get("wechat_contacts", conversation.contact_id, WechatContact)
-    title = payload.title or f"{contact.display_name if contact else '微信用户'}法律咨询"
+    messages = sorted(
+        store.filter("wechat_messages", WechatMessage, conversation_id=conversation_id),
+        key=lambda item: item.created_at,
+    )
+    analysis = await analyze_conversation_for_case(
+        contact=contact,
+        messages=messages,
+        requested_title=payload.title,
+        requested_case_type=payload.case_type if payload.case_type != "other" else None,
+    )
     case = Case(
-        title=title,
-        case_type=payload.case_type,
+        title=str(analysis["title"]),
+        case_type=analysis["case_type"],  # type: ignore[arg-type]
         status="collecting_info",
-        summary="由微信会话创建，等待进一步整理案情。",
+        summary=str(analysis["summary"]),
         wechat_contact_ref=conversation.contact_id,
         conversation_ref=conversation.id,
     )
     conversation.case_id = case.id
     store.add("cases", case)
     store.update("wechat_conversations", conversation)
-    record("case.created", "从微信会话创建案件", title, entity_type="case", entity_id=case.id)
+    if using_mock_wechat():
+        mock_wechat.update_conversation(conversation.id, {"case_id": case.id})
+    for content in analysis.get("facts", []):
+        store.add(
+            "case_memories",
+            CaseMemory(case_id=case.id, kind="fact", content=str(content), source_ref=conversation.id),
+        )
+    for content in analysis.get("evidence", []):
+        store.add(
+            "case_memories",
+            CaseMemory(case_id=case.id, kind="evidence", content=str(content), source_ref=conversation.id),
+        )
+    for content in analysis.get("uncertainties", []):
+        store.add(
+            "case_memories",
+            CaseMemory(case_id=case.id, kind="uncertainty", content=str(content), source_ref=conversation.id),
+        )
+    for title in analysis.get("suggested_tasks", [])[:5]:
+        store.add(
+            "case_tasks",
+            CaseTask(
+                case_id=case.id,
+                title=str(title),
+                assigned_agent_role="案件秘书 Agent",
+            ),
+        )
+    record("case.created", "从微信会话创建案件", case.title, entity_type="case", entity_id=case.id)
     return case
 
 
@@ -739,6 +1028,7 @@ async def bind_conversation_to_case(
     conversation_id: str,
     payload: BindConversationCaseRequest,
 ) -> Case:
+    sync_mock_wechat_if_needed()
     conversation = store.get("wechat_conversations", conversation_id, WechatConversation)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -751,6 +1041,8 @@ async def bind_conversation_to_case(
     case.updated_at = now_iso()
     store.update("wechat_conversations", conversation)
     store.update("cases", case)
+    if using_mock_wechat():
+        mock_wechat.update_conversation(conversation.id, {"case_id": case.id})
     record("case.bound_wechat", "绑定微信会话到案件", case.title, entity_type="case", entity_id=case.id)
     return case
 
@@ -1454,8 +1746,11 @@ async def update_mock_conversation(
 
 @app.delete("/api/mock-wechat/conversations/{conversation_id}")
 async def delete_mock_conversation(conversation_id: str) -> dict[str, object]:
+    conversation = store.get("wechat_conversations", conversation_id, WechatConversation)
     if not mock_wechat.delete_conversation(conversation_id):
         raise HTTPException(status_code=404, detail="Mock conversation not found")
+    if conversation:
+        delete_wechat_conversation_rows(conversation)
     return {"ok": True}
 
 

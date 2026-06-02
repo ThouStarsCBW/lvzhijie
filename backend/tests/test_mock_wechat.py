@@ -262,6 +262,30 @@ def test_wechat_send_endpoint_in_mock_mode(client: TestClient) -> None:
     assert any(m["content"] == "通过微信接口发送" for m in mock_messages)
 
 
+def test_delete_wechat_conversation_in_mock_mode_updates_mock_files(client: TestClient) -> None:
+    connection = OpenClawConnection(transport_mode="mock")
+    client.put("/api/openclaw/connection", json=connection.model_dump())
+    conv = client.post(
+        "/api/mock-wechat/conversations",
+        json={"display_name": "微信删除测试"},
+    ).json()
+    conv_id = conv["id"]
+    client.post(
+        f"/api/mock-wechat/conversations/{conv_id}/messages",
+        data={"sender": "wechat_user", "content": "这条消息会随会话删除"},
+    )
+
+    deleted = client.delete(f"/api/wechat/conversations/{conv_id}")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    conversations = client.get("/api/wechat/conversations").json()
+    assert all(item["id"] != conv_id for item in conversations)
+    mock_conversations = client.get("/api/mock-wechat/conversations").json()
+    assert all(item["id"] != conv_id for item in mock_conversations)
+    assert client.get(f"/api/mock-wechat/conversations/{conv_id}/messages").json() == []
+
+
 def test_assets_are_served(client: TestClient) -> None:
     conv_id = "conv_demo"
     

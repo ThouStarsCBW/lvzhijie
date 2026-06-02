@@ -68,6 +68,10 @@ export const api = {
   conversations: () => request<WechatConversation[]>("/api/wechat/conversations"),
   conversationMessages: (conversationId: string) =>
     request<WechatMessage[]>(`/api/wechat/conversations/${conversationId}/messages`),
+  deleteWechatConversation: (conversationId: string) =>
+    request<Record<string, unknown>>(`/api/wechat/conversations/${conversationId}`, {
+      method: "DELETE",
+    }),
   sendWechatMessage: (conversationId: string, content: string) =>
     request<WechatMessage>(`/api/wechat/conversations/${conversationId}/send`, {
       method: "POST",

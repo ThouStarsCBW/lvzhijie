@@ -161,6 +161,32 @@ def test_reasoning_creates_followups_and_mock_send(client: TestClient) -> None:
     assert payload["message"]["status"] == "sent_via_openclaw"
 
 
+def test_create_case_from_conversation_summarizes_chat_without_llm(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LVZHIJIE_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    response = client.post("/api/wechat/conversations/conv_demo/case", json={})
+
+    assert response.status_code == 200
+    created = response.json()
+    assert created["conversation_ref"] == "conv_demo"
+    assert created["wechat_contact_ref"] == "contact_demo"
+    assert created["case_type"] == "labor"
+    assert "张先生" in created["title"]
+    assert "拖欠" in created["summary"]
+    detail = client.get(f"/api/cases/{created['id']}").json()
+    memories = detail["memories"]
+    assert any(memory["kind"] == "fact" and "工资" in memory["content"] for memory in memories)
+    assert any(memory["kind"] == "uncertainty" for memory in memories)
+    assert detail["tasks"]
+    conversations = client.get("/api/wechat/conversations").json()
+    demo = next(item for item in conversations if item["id"] == "conv_demo")
+    assert demo["case_id"] == created["id"]
+
+
 def test_reply_workflow_creates_short_and_long_outputs(client: TestClient) -> None:
     short_job = client.post(
         "/api/cases/case_demo/reply-jobs",
@@ -211,3 +237,20 @@ def test_bind_existing_case_to_wechat_conversation(client: TestClient) -> None:
     conversations = client.get("/api/wechat/conversations").json()
     demo = next(item for item in conversations if item["id"] == "conv_demo")
     assert demo["case_id"] == case_id
+
+
+def test_delete_wechat_conversation_removes_messages_and_unbinds_case(client: TestClient) -> None:
+    assert client.get("/api/wechat/conversations/conv_demo/messages").json()
+
+    deleted = client.delete("/api/wechat/conversations/conv_demo")
+
+    assert deleted.status_code == 200
+    payload = deleted.json()
+    assert payload["ok"] is True
+    assert payload["messages"] >= 1
+    conversations = client.get("/api/wechat/conversations").json()
+    assert all(item["id"] != "conv_demo" for item in conversations)
+    assert client.get("/api/wechat/conversations/conv_demo/messages").json() == []
+    case = client.get("/api/cases/case_demo").json()["case"]
+    assert case["conversation_ref"] is None
+    assert case["wechat_contact_ref"] is None

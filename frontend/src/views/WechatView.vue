@@ -12,21 +12,25 @@
         <h2 class="panel-title">会话</h2>
         <p class="panel-subtitle">微信插件同步过来的聊天。</p>
         <input v-model="query" class="input" placeholder="搜索联系人或消息内容" style="margin-bottom: 10px" />
-        <button
+        <div
           v-for="conversation in filteredConversations"
           :key="conversation.id"
-          :class="['list-item', selectedId === conversation.id && 'active']"
-          @click="select(conversation.id)"
+          :class="['list-item', 'item-with-action', selectedId === conversation.id && 'active']"
         >
-          <strong>{{ conversation.contact?.display_name ?? "微信用户" }}</strong>
-          <div class="muted small">
-            {{ conversation.contact?.remark ?? conversation.openclaw_conversation_id }}
-          </div>
-          <div style="margin-top: 8px">
-            <Badge tone="blue">{{ autoReplyLabel(conversation.auto_reply_source) }}</Badge>
-            <Badge v-if="conversation.case_id" tone="green" style="margin-left: 6px">已建案</Badge>
-          </div>
-        </button>
+          <button class="list-item-main" type="button" @click="select(conversation.id)">
+            <strong>{{ conversation.contact?.display_name ?? "微信用户" }}</strong>
+            <div class="muted small">
+              {{ conversation.contact?.remark ?? conversation.openclaw_conversation_id }}
+            </div>
+            <div style="margin-top: 8px">
+              <Badge tone="blue">{{ autoReplyLabel(conversation.auto_reply_source) }}</Badge>
+              <Badge v-if="conversation.case_id" tone="green" style="margin-left: 6px">已建案</Badge>
+            </div>
+          </button>
+          <button class="button danger conversation-delete-button" type="button" @click="deleteConversation(conversation)">
+            删除
+          </button>
+        </div>
       </section>
 
       <section class="panel">
@@ -35,13 +39,19 @@
             <h2 class="panel-title">聊天记录</h2>
             <p class="panel-subtitle">电脑端发送会经由微信桥转发到微信。</p>
           </div>
-          <div v-if="selected && !selected.case_id" class="page-actions">
-            <select v-model="bindCaseId" class="select" style="width: 180px">
+          <div v-if="selected" class="page-actions">
+            <select v-if="!selected.case_id" v-model="bindCaseId" class="select" style="width: 180px">
               <option value="">绑定已有案件</option>
               <option v-for="item in cases" :key="item.id" :value="item.id">{{ item.title }}</option>
             </select>
-            <button class="button" :disabled="!bindCaseId" @click="bindCase">绑定</button>
-            <button class="button" @click="createCase">一键建案</button>
+            <button v-if="!selected.case_id" class="button" :disabled="!bindCaseId" @click="bindCase">绑定</button>
+            <button
+              class="button primary"
+              :disabled="Boolean(selected.case_id) || creatingCase"
+              @click="createCase"
+            >
+              {{ selected.case_id ? "已建立案件" : creatingCase ? "建案中..." : "一键建立案件" }}
+            </button>
           </div>
         </div>
         <div style="min-height: 360px">
@@ -107,6 +117,7 @@ const syncMessage = ref("");
 const syncOk = ref(true);
 const query = ref("");
 const bindCaseId = ref("");
+const creatingCase = ref(false);
 
 const selected = computed(() => conversations.value.find((item) => item.id === selectedId.value));
 const filteredMessages = computed(() => {
@@ -129,8 +140,15 @@ const filteredConversations = computed(() => {
 
 async function load() {
   [conversations.value, cases.value] = await Promise.all([api.conversations(), api.cases()]);
+  const selectedExists = conversations.value.some((item) => item.id === selectedId.value);
+  if (!selectedExists) {
+    selectedId.value = "";
+    messages.value = [];
+  }
   if (!selectedId.value && conversations.value[0]) {
     await select(conversations.value[0].id);
+  } else if (selectedId.value) {
+    await select(selectedId.value);
   }
 }
 
@@ -149,15 +167,36 @@ async function send() {
 
 async function createCase() {
   if (!selectedId.value) return;
-  await api.createCaseFromConversation(selectedId.value);
-  bindCaseId.value = "";
-  await load();
+  creatingCase.value = true;
+  try {
+    const created = await api.createCaseFromConversation(selectedId.value);
+    bindCaseId.value = "";
+    syncOk.value = true;
+    syncMessage.value = `已根据聊天记录建立案件：${created.title}`;
+    await load();
+  } finally {
+    creatingCase.value = false;
+  }
 }
 
 async function bindCase() {
   if (!selectedId.value || !bindCaseId.value) return;
   await api.bindConversationToCase(selectedId.value, bindCaseId.value);
   bindCaseId.value = "";
+  await load();
+}
+
+async function deleteConversation(conversation: WechatConversation) {
+  const label = conversation.contact?.display_name ?? conversation.openclaw_conversation_id;
+  if (!confirm(`确定删除“${label}”这个会话及其聊天记录吗？`)) return;
+  await api.deleteWechatConversation(conversation.id);
+  if (selectedId.value === conversation.id) {
+    selectedId.value = "";
+    messages.value = [];
+    bindCaseId.value = "";
+  }
+  syncOk.value = true;
+  syncMessage.value = `已删除会话：${label}`;
   await load();
 }
 

@@ -27,8 +27,8 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 button,
@@ -50,13 +50,13 @@ button {
 .app-main {
   flex: 1;
   min-width: 0;
-  margin-left: 212px;
+  margin-left: 228px;
 }
 
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
-  width: 212px;
+  width: 228px;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--border);
@@ -66,14 +66,14 @@ button {
 .brand {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 13px 12px;
+  gap: 10px;
+  padding: 15px 14px;
   border-bottom: 1px solid var(--border);
 }
 
 .brand-mark {
-  width: 28px;
-  height: 28px;
+  width: 31px;
+  height: 31px;
   border-radius: 6px;
   display: grid;
   place-items: center;
@@ -83,32 +83,32 @@ button {
 }
 
 .brand-name {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 0;
 }
 
 .brand-subtitle {
   margin-top: 2px;
-  font-size: 9px;
+  font-size: 10px;
   color: var(--muted);
   text-transform: uppercase;
 }
 
 .nav {
   flex: 1;
-  padding: 12px 8px;
+  padding: 13px 10px;
 }
 
 .nav-section + .nav-section {
-  margin-top: 14px;
+  margin-top: 17px;
 }
 
 .nav-section p {
   margin: 0 0 5px;
   padding: 0 7px;
   color: var(--quiet);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -117,11 +117,11 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 30px;
-  padding: 6px 8px;
+  min-height: 33px;
+  padding: 6px 9px;
   border-radius: 6px;
   color: #334155;
-  font-size: 12px;
+  font-size: 13px;
   text-decoration: none;
 }
 
@@ -136,18 +136,18 @@ button {
 }
 
 .nav-icon {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
 }
 
 .sidebar-status {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 11px;
+  padding: 11px 12px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .status-dot {
@@ -169,8 +169,8 @@ button {
   position: sticky;
   top: 0;
   z-index: 10;
-  min-height: 62px;
-  padding: 13px 20px;
+  min-height: 68px;
+  padding: 15px 23px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -182,14 +182,14 @@ button {
 
 .page-header h1 {
   margin: 0;
-  font-size: 18px;
+  font-size: 20px;
   letter-spacing: 0;
 }
 
 .page-header p {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .page-actions {
@@ -199,7 +199,7 @@ button {
 }
 
 .page-content {
-  padding: 16px 20px 28px;
+  padding: 18px 23px 31px;
 }
 
 .mission-surface {
@@ -207,7 +207,7 @@ button {
   grid-template-columns: minmax(0, 1.35fr) minmax(460px, 0.65fr);
   gap: 14px;
   align-items: stretch;
-  padding: 14px;
+  padding: 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: white;
@@ -217,7 +217,7 @@ button {
 .mission-surface h2 {
   margin: 8px 0 5px;
   color: #0f172a;
-  font-size: 19px;
+  font-size: 21px;
   line-height: 1.15;
   letter-spacing: 0;
 }
@@ -226,7 +226,7 @@ button {
   max-width: 760px;
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -240,7 +240,7 @@ button {
 }
 
 .mission-metrics div {
-  padding: 11px;
+  padding: 12px;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
@@ -255,7 +255,7 @@ button {
 
 .mission-metrics strong {
   display: block;
-  font-size: 19px;
+  font-size: 21px;
   font-weight: 700;
   letter-spacing: 0;
 }
@@ -264,7 +264,7 @@ button {
   display: block;
   margin-top: 3px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   text-transform: uppercase;
 }
@@ -277,10 +277,10 @@ button {
 }
 
 .module-panel {
-  min-height: 176px;
+  min-height: 190px;
   display: flex;
   flex-direction: column;
-  padding: 12px;
+  padding: 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: white;
@@ -309,8 +309,8 @@ button {
 }
 
 .module-icon {
-  width: 23px;
-  height: 23px;
+  width: 24px;
+  height: 24px;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -320,7 +320,7 @@ button {
 
 .module-panel h2 {
   margin: 10px 0 5px;
-  font-size: 13px;
+  font-size: 14.5px;
   line-height: 1.35;
   letter-spacing: 0;
 }
@@ -329,7 +329,7 @@ button {
   flex: 1;
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -338,7 +338,7 @@ button {
   padding-top: 9px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .module-footer span:last-child {
@@ -372,7 +372,7 @@ button {
 }
 
 .panel {
-  padding: 12px;
+  padding: 14px;
 }
 
 .feedback-panel {
@@ -386,34 +386,34 @@ button {
 
 .panel-title {
   margin: 0 0 4px;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .panel-subtitle {
   margin: 0 0 10px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .stat-card {
-  padding: 12px;
+  padding: 14px;
 }
 
 .stat-label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .stat-value {
   margin-top: 4px;
-  font-size: 20px;
+  font-size: 23px;
   font-weight: 700;
 }
 
 .stat-hint {
   margin-top: 4px;
   color: var(--quiet);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .button {
@@ -422,11 +422,11 @@ button {
   justify-content: center;
   border: 1px solid var(--border-strong);
   border-radius: 6px;
-  min-height: 28px;
-  padding: 0 9px;
+  min-height: 31px;
+  padding: 0 10px;
   background: white;
   color: #334155;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1;
   text-decoration: none;
   white-space: nowrap;
@@ -463,17 +463,17 @@ button {
   border-radius: 6px;
   background: white;
   color: var(--text);
-  padding: 6px 8px;
-  font-size: 12px;
+  padding: 6px 9px;
+  font-size: 13px;
 }
 
 .check-row {
-  min-height: 28px;
+  min-height: 31px;
   display: flex;
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .textarea {
@@ -500,16 +500,16 @@ button {
 
 .table th,
 .table td {
-  padding: 8px 7px;
+  padding: 9px 8px;
   border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: top;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .table th {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -519,7 +519,7 @@ button {
   align-items: center;
   border-radius: 999px;
   padding: 2px 7px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
 }
 
@@ -550,7 +550,7 @@ button {
 
 .split {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 296px minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -565,13 +565,13 @@ button {
 }
 
 .tab-button {
-  min-height: 30px;
-  padding: 0 8px;
+  min-height: 33px;
+  padding: 0 9px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .tab-button.active {
@@ -582,7 +582,7 @@ button {
 
 .list-item {
   width: 100%;
-  padding: 9px;
+  padding: 10px;
   text-align: left;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -612,6 +612,13 @@ button {
   gap: 10px;
 }
 
+.conversation-delete-button {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
 .list-item.compact {
   padding: 7px 0;
   border-bottom: 1px solid var(--border);
@@ -632,7 +639,7 @@ button {
   display: grid;
   grid-template-columns: 96px minmax(0, 1fr);
   gap: 7px 10px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .meta-grid span {
@@ -676,7 +683,7 @@ button {
 .empty-state {
   padding: 14px 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .muted {
@@ -684,13 +691,13 @@ button {
 }
 
 .small {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .message {
   max-width: 76%;
   margin-bottom: 8px;
-  padding: 7px 9px;
+  padding: 8px 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: #f8fafc;
@@ -704,7 +711,7 @@ button {
 
 .message-meta {
   margin-top: 5px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--quiet);
 }
 
@@ -742,16 +749,16 @@ button {
 }
 
 .reasoning-node {
-  min-height: 98px;
+  min-height: 108px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: white;
-  padding: 10px;
+  padding: 11px;
 }
 
 .reasoning-node h3 {
   margin: 5px 0 4px;
-  font-size: 12px;
+  font-size: 13.5px;
 }
 
 .architecture-panel {
