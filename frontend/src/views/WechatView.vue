@@ -288,11 +288,12 @@ function playbackHintDirectionFor(message: WechatMessage) {
 }
 
 function playbackDelay(message: WechatMessage) {
-  const base = message.sender === "owner" ? 1500 : 1200;
-  const perChar = message.sender === "owner" ? 12 : 10;
-  const max = message.sender === "owner" ? 4200 : 3200;
-  const textLength = `${message.content ?? ""}${message.attachments?.length ? "附件" : ""}`.length;
-  return Math.min(max, Math.max(1400, base + textLength * perChar));
+  const textLength = (message.content ?? "").trim().length;
+  const attachmentDelay = (message.attachments?.length ?? 0) * 900;
+  if (message.sender === "owner") {
+    return Math.min(9000, Math.max(2600, 2200 + textLength * 34 + attachmentDelay));
+  }
+  return Math.min(7000, Math.max(2200, 1800 + textLength * 26 + attachmentDelay));
 }
 
 function sleep(ms: number) {

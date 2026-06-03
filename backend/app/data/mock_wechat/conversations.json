@@ -18,24 +18,6 @@
     }
   },
   {
-    "id": "conv_f5bb4132c3ba",
-    "openclaw_conversation_id": "mock_conv_f5bb4132c3ba",
-    "contact_id": "contact_b85fb3edf3d1",
-    "case_id": null,
-    "status": "open",
-    "auto_reply_source": "openclaw",
-    "last_message_at": "2026-06-03T01:28:33.082229+00:00",
-    "unread_count": 0,
-    "contact": {
-      "id": "contact_b85fb3edf3d1",
-      "openclaw_contact_id": "mock_contact_b85fb3edf3d1",
-      "display_name": "L某家属",
-      "remark": "交通肇事案",
-      "avatar_url": null,
-      "last_seen_at": "2026-06-03T00:39:49.499078+00:00"
-    }
-  },
-  {
     "id": "conv_5acfce59bc2a",
     "openclaw_conversation_id": "mock_conv_5acfce59bc2a",
     "contact_id": "contact_425f25087f25",
