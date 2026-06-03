@@ -223,6 +223,98 @@ def test_reply_workflow_creates_short_and_long_outputs(client: TestClient) -> No
     assert any(document["id"] == payload["output_document_id"] for document in detail["documents"])
 
 
+def test_task_center_executes_research_review_and_drafting(client: TestClient) -> None:
+    similar_task = client.post(
+        "/api/cases/case_demo/tasks",
+        json={
+            "title": "检索拖欠工资类案",
+            "task_type": "similar_case_search",
+            "description": "拖欠工资和被迫离职",
+            "assigned_agent_role": "法律检索 Agent",
+        },
+    )
+    assert similar_task.status_code == 200
+    similar_task_id = similar_task.json()["id"]
+
+    executed_similar = client.post(f"/api/cases/case_demo/tasks/{similar_task_id}/execute", json={})
+    assert executed_similar.status_code == 200
+    assert executed_similar.json()["status"] == "waiting_owner_review"
+
+    regulation_task = client.post(
+        "/api/cases/case_demo/tasks",
+        json={
+            "title": "检索劳动法规",
+            "task_type": "regulation_search",
+            "description": "工资支付和劳动仲裁时效",
+            "assigned_agent_role": "法律检索 Agent",
+        },
+    )
+    regulation_task_id = regulation_task.json()["id"]
+    assert client.post(f"/api/cases/case_demo/tasks/{regulation_task_id}/execute", json={}).status_code == 200
+
+    doc_resp = client.post(
+        "/api/documents",
+        json={
+            "case_id": "case_demo",
+            "title": "任务中心审查合同",
+            "document_type": "contract",
+            "content_text": "甲方应在7日内付款，违约金每日万分之三。",
+        },
+    )
+    assert doc_resp.status_code == 200
+    document_id = doc_resp.json()["id"]
+    first_rev_id = client.get(f"/api/documents/{document_id}").json()["revisions"][0]["id"]
+    second_rev = client.post(
+        f"/api/documents/{document_id}/revisions",
+        json={"content_text": "甲方应在30日内付款，违约金每日万分之一。", "change_summary": "付款和违约金调整"},
+    )
+    assert second_rev.status_code == 200
+    second_rev_id = second_rev.json()["id"]
+
+    review_task = client.post(
+        "/api/cases/case_demo/tasks",
+        json={
+            "title": "审查合同版本差异",
+            "task_type": "document_review",
+            "document_id": document_id,
+            "base_revision_id": first_rev_id,
+            "target_revision_id": second_rev_id,
+            "assigned_agent_role": "合同审查律师 Agent",
+        },
+    )
+    review_task_id = review_task.json()["id"]
+    executed_review = client.post(f"/api/cases/case_demo/tasks/{review_task_id}/execute", json={})
+    assert executed_review.status_code == 200
+    assert executed_review.json()["metadata"]["analysis_id"]
+    assert "风险" in executed_review.json()["result_summary"]
+
+    drafting_task = client.post(
+        "/api/cases/case_demo/tasks",
+        json={
+            "title": "起草劳动争议意见",
+            "task_type": "document_drafting",
+            "document_id": document_id,
+            "assigned_agent_role": "文书起草 Agent",
+        },
+    )
+    drafting_task_id = drafting_task.json()["id"]
+    executed_drafting = client.post(
+        f"/api/cases/case_demo/tasks/{drafting_task_id}/execute",
+        json={"content_text": "劳动争议处理意见草稿。"},
+    )
+    assert executed_drafting.status_code == 200
+    drafting_payload = executed_drafting.json()
+    assert drafting_payload["output_document_id"] == document_id
+    assert drafting_payload["output_revision_id"]
+
+    detail = client.get("/api/cases/case_demo").json()
+    assert detail["research_runs"]
+    assert detail["research_results"]
+    enriched = next(task for task in detail["tasks"] if task["id"] == similar_task_id)
+    assert enriched["comments"]
+    assert enriched["research_results"]
+
+
 def test_bind_existing_case_to_wechat_conversation(client: TestClient) -> None:
     created = client.post(
         "/api/cases",

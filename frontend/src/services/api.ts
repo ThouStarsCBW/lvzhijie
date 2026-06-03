@@ -4,6 +4,7 @@ import type {
   CaseItem,
   CaseMemory,
   CaseTask,
+  CaseTaskComment,
   FollowUpQuestion,
   LegalAgent,
   LegalDocument,
@@ -12,6 +13,8 @@ import type {
   LegalDocumentDiff,
   LegalDocumentRevision,
   LegalDocumentTree,
+  LegalResearchResult,
+  LegalResearchRun,
   LegalReplyJob,
   LegalReasoningRun,
   OpenClawConnection,
@@ -105,6 +108,9 @@ export const api = {
     request<{
       case: CaseItem;
       tasks: CaseTask[];
+      task_comments: CaseTaskComment[];
+      research_runs: LegalResearchRun[];
+      research_results: LegalResearchResult[];
       memories: CaseMemory[];
       documents: LegalDocument[];
       reasoning_runs: LegalReasoningRun[];
@@ -112,7 +118,87 @@ export const api = {
       reply_jobs: LegalReplyJob[];
       messages: WechatMessage[];
     }>(`/api/cases/${caseId}`),
-  createTask: (caseId: string, title: string, assigned_agent_role?: string) =>
+  createTask: (
+    caseId: string,
+    titleOrPayload:
+      | string
+      | {
+          title: string;
+          description?: string;
+          task_type?: CaseTask["task_type"];
+          status?: string;
+          assigned_agent_role?: string | null;
+          priority?: string;
+          due_at?: string | null;
+          depends_on_task_ids?: string[];
+          document_id?: string | null;
+          base_revision_id?: string | null;
+          target_revision_id?: string | null;
+          metadata?: Record<string, unknown>;
+        },
+    assigned_agent_role?: string,
+  ) => {
+    const payload =
+      typeof titleOrPayload === "string"
+        ? { title: titleOrPayload, assigned_agent_role }
+        : titleOrPayload;
+    return request<CaseTask>(`/api/cases/${caseId}/tasks`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateTask: (
+    caseId: string,
+    taskId: string,
+    payload: Partial<
+      Pick<
+        CaseTask,
+        | "title"
+        | "description"
+        | "task_type"
+        | "status"
+        | "priority"
+        | "assigned_agent_role"
+        | "due_at"
+        | "depends_on_task_ids"
+        | "document_id"
+        | "base_revision_id"
+        | "target_revision_id"
+        | "metadata"
+        | "result_summary"
+      >
+    > & { comment?: string },
+  ) =>
+    request<CaseTask>(`/api/cases/${caseId}/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  executeTask: (
+    caseId: string,
+    taskId: string,
+    payload?: {
+      query?: string;
+      keywords?: string[];
+      content_text?: string;
+      title?: string;
+      document_id?: string | null;
+      base_revision_id?: string | null;
+      target_revision_id?: string | null;
+      change_summary?: string;
+    },
+  ) =>
+    request<CaseTask>(`/api/cases/${caseId}/tasks/${taskId}/execute`, {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  taskComments: (caseId: string, taskId: string) =>
+    request<CaseTaskComment[]>(`/api/cases/${caseId}/tasks/${taskId}/comments`),
+  createTaskComment: (caseId: string, taskId: string, message: string) =>
+    request<CaseTaskComment>(`/api/cases/${caseId}/tasks/${taskId}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+  createLegacyTask: (caseId: string, title: string, assigned_agent_role?: string) =>
     request<CaseTask>(`/api/cases/${caseId}/tasks`, {
       method: "POST",
       body: JSON.stringify({ title, assigned_agent_role }),
@@ -175,7 +261,10 @@ export const api = {
 
   agents: () => request<LegalAgent[]>("/api/agents"),
   agentArchitecture: () => request<AgentArchitecture>("/api/agents/architecture"),
-  documents: () => request<LegalDocument[]>("/api/documents"),
+  documents: (caseId?: string) => {
+    const suffix = caseId ? `?case_id=${encodeURIComponent(caseId)}` : "";
+    return request<LegalDocument[]>(`/api/documents${suffix}`);
+  },
   deleteReasoningRun: (caseId: string, runId: string) =>
     request<Record<string, unknown>>(`/api/reasoning/cases/${caseId}/runs/${runId}`, {
       method: "DELETE",

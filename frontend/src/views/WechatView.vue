@@ -1,5 +1,5 @@
 <template>
-  <PageHeader title="微信工作台" description="读取微信聊天记录，并以微信桥作为手机发送跳板。">
+  <PageHeader title="客户工作台" description="读取客户聊天记录，并以微信桥作为手机发送跳板。">
     <button class="button" @click="sync">同步微信桥</button>
   </PageHeader>
   <section class="page-content">
@@ -18,7 +18,7 @@
           :class="['list-item', 'item-with-action', selectedId === conversation.id && 'active']"
         >
           <button class="list-item-main" type="button" @click="select(conversation.id)">
-            <strong>{{ conversation.contact?.display_name ?? "微信用户" }}</strong>
+            <strong>{{ conversation.contact?.display_name ?? "客户" }}</strong>
             <div class="muted small">
               {{ conversation.contact?.remark ?? conversation.openclaw_conversation_id }}
             </div>
@@ -100,7 +100,7 @@
           </div>
         </div>
         <div style="display: grid; grid-template-columns: 1fr auto; gap: 10px">
-          <input v-model="draft" class="input" placeholder="输入要发给微信用户的消息" />
+          <input v-model="draft" class="input" placeholder="输入要发给客户的消息" />
           <button class="button primary" :disabled="!selectedId || !draft.trim()" @click="send">
             发送
           </button>
@@ -302,7 +302,7 @@ function sleep(ms: number) {
 
 function senderLabel(sender: string) {
   return {
-    wechat_user: "微信用户",
+    wechat_user: "客户",
     openclaw_auto: "微信桥自动回复",
     owner: "电脑端",
     system: "系统",

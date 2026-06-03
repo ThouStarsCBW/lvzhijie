@@ -44,6 +44,34 @@ class JsonStore:
         if "legal_document_analyses" not in self.data:
             self.data["legal_document_analyses"] = []
             changed = True
+        if "case_task_comments" not in self.data:
+            self.data["case_task_comments"] = []
+            changed = True
+        if "legal_research_runs" not in self.data:
+            self.data["legal_research_runs"] = []
+            changed = True
+        if "legal_research_results" not in self.data:
+            self.data["legal_research_results"] = []
+            changed = True
+
+        for task in self.data.get("case_tasks", []):
+            if not isinstance(task, dict):
+                continue
+            defaults = {
+                "task_type": "general",
+                "due_at": None,
+                "depends_on_task_ids": [],
+                "document_id": None,
+                "base_revision_id": None,
+                "target_revision_id": None,
+                "output_document_id": None,
+                "output_revision_id": None,
+                "metadata": {},
+            }
+            for field, default in defaults.items():
+                if field not in task:
+                    task[field] = default
+                    changed = True
 
         existing_agent_roles = {
             item.get("role")

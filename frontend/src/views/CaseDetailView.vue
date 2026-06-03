@@ -35,19 +35,47 @@
         <div class="meta-grid">
           <span>类型</span><strong>{{ caseTypeLabel(detail.case.case_type) }}</strong>
           <span>状态</span><strong>{{ caseStatusLabel(detail.case.status) }}</strong>
-          <span>微信会话</span><strong>{{ detail.case.conversation_ref || "未绑定" }}</strong>
+          <span>客户会话</span><strong>{{ detail.case.conversation_ref || "未绑定" }}</strong>
           <span>创建时间</span><strong>{{ shortTime(detail.case.created_at) }}</strong>
         </div>
       </section>
 
       <section class="panel">
-        <h2 class="panel-title">新增任务</h2>
-        <p class="panel-subtitle">把案件动作分配给律所角色。</p>
+        <h2 class="panel-title">新建法律任务</h2>
+        <p class="panel-subtitle">检索、审查和撰写任务会沉淀到案件和文档版本。</p>
         <input v-model="taskTitle" class="input" placeholder="任务标题" />
+        <select v-model="taskType" class="select" style="margin-top: 10px">
+          <option v-for="option in taskTypeOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+        <textarea
+          v-model="taskDescription"
+          class="textarea"
+          placeholder="任务说明、检索问题或撰写要求"
+          style="margin-top: 10px"
+        />
         <select v-model="taskAgent" class="select" style="margin-top: 10px">
           <option value="">不指定角色</option>
           <option v-for="agent in agents" :key="agent.id" :value="agent.title">
             {{ agent.title }}
+          </option>
+        </select>
+        <select v-model="taskPriority" class="select" style="margin-top: 10px">
+          <option value="medium">普通优先级</option>
+          <option value="high">高优先级</option>
+          <option value="urgent">紧急</option>
+          <option value="low">低优先级</option>
+        </select>
+        <select
+          v-if="taskType === 'document_review' || taskType === 'document_drafting'"
+          v-model="taskDocumentId"
+          class="select"
+          style="margin-top: 10px"
+        >
+          <option value="">不绑定文件</option>
+          <option v-for="document in detail.documents" :key="document.id" :value="document.id">
+            {{ document.title }}
           </option>
         </select>
         <div class="form-actions">
@@ -58,20 +86,84 @@
       </section>
 
       <section class="panel full-span">
-        <h2 class="panel-title">案件任务</h2>
-        <div class="item-grid">
-          <article v-for="task in detail.tasks" :key="task.id" class="list-item item-with-action">
-            <div>
-              <strong>{{ task.title }}</strong>
-              <div class="muted small">
-                {{ agentTitleLabel(task.assigned_agent_role) }} · {{ taskStatusLabel(task.status) }} · {{ priorityLabel(task.priority) }}
-              </div>
+        <h2 class="panel-title">任务中心</h2>
+        <div v-if="actionMessage" class="muted small" style="margin-bottom: 10px">{{ actionMessage }}</div>
+        <div class="task-board">
+          <section v-for="column in taskStatusColumns" :key="column.key" class="task-column">
+            <div class="task-column-head">
+              <strong>{{ column.label }}</strong>
+              <span class="muted small">{{ tasksByStatus(column.key).length }}</span>
             </div>
-            <button class="button danger" :disabled="deletingId === task.id" @click="deleteTask(task.id)">
-              {{ deletingId === task.id ? "删除中" : confirmingId === task.id ? "确认删除" : "删除" }}
-            </button>
-            <button v-if="confirmingId === task.id" class="button" @click="confirmingId = ''">取消</button>
-          </article>
+            <article v-for="task in tasksByStatus(column.key)" :key="task.id" class="task-card">
+              <div class="task-card-head">
+                <div>
+                  <Badge :tone="taskTypeTone(task.task_type)">{{ taskTypeLabel(task.task_type) }}</Badge>
+                  <Badge :tone="taskStatusTone(task.status)" style="margin-left: 6px">
+                    {{ taskStatusLabel(task.status) }}
+                  </Badge>
+                </div>
+                <button class="button danger tiny" :disabled="deletingId === task.id" @click="deleteTask(task.id)">
+                  {{ deletingId === task.id ? "删除中" : confirmingId === task.id ? "确认删除" : "删除" }}
+                </button>
+              </div>
+              <h3 class="task-card-title">{{ task.title }}</h3>
+              <div class="muted small">
+                {{ agentTitleLabel(task.assigned_agent_role) }} · {{ priorityLabel(task.priority) }}
+              </div>
+              <p v-if="task.description" class="muted small">{{ task.description }}</p>
+              <p v-if="task.result_summary" class="task-result">{{ task.result_summary }}</p>
+              <div v-if="task.blocked_by_task_ids?.length" class="muted small">
+                依赖未完成：{{ task.blocked_by_task_ids.length }} 项
+              </div>
+              <div v-if="task.document_id || task.output_document_id" class="task-links">
+                <RouterLink v-if="task.document_id" class="button tiny" :to="`/documents/${task.document_id}`">
+                  查看文件
+                </RouterLink>
+                <a v-if="task.output_document_id" class="button tiny" :href="api.documentExportUrl(task.output_document_id)">
+                  导出产物
+                </a>
+              </div>
+              <div v-if="task.research_results?.length" class="research-result-list">
+                <article v-for="result in task.research_results.slice(0, 2)" :key="result.id" class="research-result">
+                  <strong>{{ result.title }}</strong>
+                  <div class="muted small">{{ result.reference }}</div>
+                  <ul>
+                    <li v-for="point in result.key_points.slice(0, 2)" :key="point">{{ point }}</li>
+                  </ul>
+                </article>
+              </div>
+              <textarea
+                v-if="task.task_type === 'similar_case_search' || task.task_type === 'regulation_search' || task.task_type === 'document_drafting'"
+                v-model="taskExecutionInputs[task.id]"
+                class="textarea compact"
+                :placeholder="task.task_type === 'document_drafting' ? '可粘贴草稿文本，留空则按案件材料生成' : '可补充检索关键词，留空则按案情生成'"
+              />
+              <div class="task-actions">
+                <button class="button primary tiny" :disabled="processingId === task.id" @click="executeTask(task)">
+                  {{ processingId === task.id ? "执行中" : "执行" }}
+                </button>
+                <button class="button tiny" :disabled="task.status === 'done'" @click="updateTaskStatus(task, 'waiting_owner_review')">
+                  待复核
+                </button>
+                <button class="button tiny" :disabled="task.status === 'done'" @click="updateTaskStatus(task, 'done')">
+                  完成
+                </button>
+              </div>
+              <div class="task-comments" v-if="task.comments?.length">
+                <div v-for="comment in task.comments.slice(-2)" :key="comment.id" class="muted small">
+                  {{ comment.author_label }}：{{ comment.message }}
+                </div>
+              </div>
+              <div class="task-comment-box">
+                <input v-model="taskCommentInputs[task.id]" class="input compact" placeholder="记录过程" />
+                <button class="button tiny" :disabled="!taskCommentInputs[task.id]?.trim()" @click="addTaskComment(task)">
+                  记录
+                </button>
+              </div>
+              <button v-if="confirmingId === task.id" class="button tiny" @click="confirmingId = ''">取消删除</button>
+            </article>
+            <div v-if="tasksByStatus(column.key).length === 0" class="empty-state compact">暂无任务</div>
+          </section>
         </div>
       </section>
     </section>
@@ -216,7 +308,7 @@
     <section v-if="activeTab === 'reasoning'" class="grid cols-2" style="margin-top: 16px">
       <section class="panel">
         <h2 class="panel-title">推理图</h2>
-        <p class="panel-subtitle">节点和边可审查，追问可以直接发回微信。</p>
+        <p class="panel-subtitle">节点和边可审查，追问可以直接发回客户。</p>
         <div v-if="latestRun" class="reasoning-summary">
           <Badge :tone="latestRun.status === 'needs_evidence' ? 'amber' : 'green'">
             {{ reasoningStatusLabel(latestRun.status) }}
@@ -276,7 +368,7 @@
     </section>
 
     <section v-if="activeTab === 'chat'" class="panel" style="margin-top: 16px">
-      <h2 class="panel-title">关联微信聊天</h2>
+      <h2 class="panel-title">关联客户聊天</h2>
       <p class="panel-subtitle">聊天来源为微信桥通道同步。</p>
       <div
         v-for="message in detail.messages"
@@ -286,7 +378,7 @@
         <div>{{ message.content }}</div>
         <div class="message-meta">{{ messageLabel(message) }}</div>
       </div>
-      <div v-if="!detail.messages.length" class="empty-state">此案件尚未绑定微信聊天。</div>
+      <div v-if="!detail.messages.length" class="empty-state">此案件尚未绑定客户聊天。</div>
     </section>
   </section>
 </template>
@@ -299,7 +391,7 @@ import Badge from "@/components/Badge.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import StatCard from "@/components/StatCard.vue";
 import { api } from "@/services/api";
-import type { LegalAgent } from "@/types";
+import type { CaseTask, LegalAgent } from "@/types";
 
 const props = defineProps<{ id: string }>();
 const route = useRoute();
@@ -308,7 +400,13 @@ const detail = ref<Awaited<ReturnType<typeof api.caseDetail>> | null>(null);
 const agents = ref<LegalAgent[]>([]);
 const activeTab = ref(tabFromPath(route.path));
 const taskTitle = ref("");
+const taskDescription = ref("");
+const taskType = ref<CaseTask["task_type"]>("general");
 const taskAgent = ref("");
+const taskPriority = ref("medium");
+const taskDocumentId = ref("");
+const taskExecutionInputs = ref<Record<string, string>>({});
+const taskCommentInputs = ref<Record<string, string>>({});
 const memoryKind = ref("fact");
 const memoryContent = ref("");
 const documentTitle = ref("");
@@ -324,6 +422,24 @@ const actionMessage = ref("");
 const deletingId = ref("");
 const confirmingId = ref("");
 const processingId = ref("");
+
+const taskTypeOptions: Array<{ value: CaseTask["task_type"]; label: string }> = [
+  { value: "general", label: "通用任务" },
+  { value: "similar_case_search", label: "类案检索" },
+  { value: "regulation_search", label: "法规检索" },
+  { value: "document_review", label: "文档审查" },
+  { value: "document_drafting", label: "文档撰写" },
+  { value: "client_reply", label: "客户回复" },
+  { value: "reasoning", label: "案件推理" },
+];
+
+const taskStatusColumns = [
+  { key: "todo", label: "待办" },
+  { key: "in_progress", label: "进行中" },
+  { key: "waiting_owner_review", label: "待复核" },
+  { key: "done", label: "已完成" },
+  { key: "blocked", label: "受阻" },
+];
 
 const tabs = [
   { key: "overview", label: "总览" },
@@ -378,9 +494,74 @@ async function generateReasoning() {
 
 async function createTask() {
   if (!taskTitle.value.trim()) return;
-  await api.createTask(props.id, taskTitle.value.trim(), taskAgent.value || undefined);
+  await api.createTask(props.id, {
+    title: taskTitle.value.trim(),
+    description: taskDescription.value.trim(),
+    task_type: taskType.value,
+    assigned_agent_role: taskAgent.value || undefined,
+    priority: taskPriority.value,
+    document_id: taskDocumentId.value || undefined,
+    metadata:
+      taskType.value === "similar_case_search" || taskType.value === "regulation_search"
+        ? { query: taskDescription.value.trim() }
+        : {},
+  });
   taskTitle.value = "";
+  taskDescription.value = "";
+  taskType.value = "general";
   taskAgent.value = "";
+  taskPriority.value = "medium";
+  taskDocumentId.value = "";
+  await load();
+}
+
+function tasksByStatus(status: string) {
+  return (detail.value?.tasks ?? []).filter((task) => task.status === status);
+}
+
+async function updateTaskStatus(task: CaseTask, status: string) {
+  processingId.value = task.id;
+  actionMessage.value = "";
+  try {
+    await api.updateTask(props.id, task.id, { status });
+    await load();
+  } catch (error) {
+    actionMessage.value = error instanceof Error ? error.message : "任务状态更新失败";
+  } finally {
+    processingId.value = "";
+  }
+}
+
+async function executeTask(task: CaseTask) {
+  processingId.value = task.id;
+  actionMessage.value = "";
+  const input = taskExecutionInputs.value[task.id]?.trim();
+  try {
+    await api.executeTask(props.id, task.id, {
+      query:
+        task.task_type === "similar_case_search" || task.task_type === "regulation_search"
+          ? input || undefined
+          : undefined,
+      content_text: task.task_type === "document_drafting" ? input || undefined : undefined,
+      title: task.task_type === "document_drafting" ? task.title : undefined,
+      document_id: task.document_id || undefined,
+      base_revision_id: task.base_revision_id || undefined,
+      target_revision_id: task.target_revision_id || undefined,
+    });
+    taskExecutionInputs.value[task.id] = "";
+    await load();
+  } catch (error) {
+    actionMessage.value = error instanceof Error ? error.message : "任务执行失败";
+  } finally {
+    processingId.value = "";
+  }
+}
+
+async function addTaskComment(task: CaseTask) {
+  const message = taskCommentInputs.value[task.id]?.trim();
+  if (!message) return;
+  await api.createTaskComment(props.id, task.id, message);
+  taskCommentInputs.value[task.id] = "";
   await load();
 }
 
@@ -530,14 +711,44 @@ function taskStatusLabel(status: string) {
     todo: "待办",
     in_progress: "进行中",
     doing: "进行中",
+    waiting_user: "等客户",
+    waiting_owner_review: "待复核",
     done: "已完成",
     blocked: "受阻",
   }[status] ?? status;
 }
 
+function taskStatusTone(status: string): "blue" | "green" | "amber" | "red" | "slate" {
+  if (status === "done") return "green";
+  if (status === "in_progress") return "blue";
+  if (status === "waiting_owner_review" || status === "waiting_user") return "amber";
+  if (status === "blocked") return "red";
+  return "slate";
+}
+
+function taskTypeLabel(type: string) {
+  return {
+    general: "通用",
+    similar_case_search: "类案检索",
+    regulation_search: "法规检索",
+    document_review: "文档审查",
+    document_drafting: "文档撰写",
+    client_reply: "客户回复",
+    reasoning: "案件推理",
+  }[type] ?? type;
+}
+
+function taskTypeTone(type: string): "blue" | "green" | "amber" | "red" | "slate" {
+  if (type === "similar_case_search" || type === "regulation_search") return "blue";
+  if (type === "document_review") return "amber";
+  if (type === "document_drafting") return "green";
+  return "slate";
+}
+
 function priorityLabel(priority: string) {
   return {
     low: "低优先级",
+    medium: "普通优先级",
     normal: "普通优先级",
     high: "高优先级",
     urgent: "紧急",
@@ -621,7 +832,7 @@ function questionStatusLabel(status: string) {
 
 function senderLabel(sender: string) {
   return {
-    wechat_user: "微信用户",
+    wechat_user: "客户",
     openclaw_auto: "微信桥自动回复",
     owner: "电脑端",
     system: "系统",
@@ -678,3 +889,107 @@ onMounted(async () => {
   await Promise.all([load(), api.agents().then((items) => (agents.value = items))]);
 });
 </script>
+
+<style scoped>
+.task-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.task-column {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface);
+}
+
+.task-column-head,
+.task-card-head,
+.task-actions,
+.task-links,
+.task-comment-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.task-card-title {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.task-result {
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.research-result-list {
+  display: grid;
+  gap: 8px;
+}
+
+.research-result {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.research-result ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.textarea.compact {
+  min-height: 72px;
+}
+
+.input.compact {
+  min-width: 0;
+}
+
+.button.tiny {
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.empty-state.compact {
+  margin-top: 10px;
+  padding: 12px;
+}
+
+@media (max-width: 1200px) {
+  .task-board {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .task-board {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

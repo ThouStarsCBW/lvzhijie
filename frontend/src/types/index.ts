@@ -86,10 +86,39 @@ export type CaseTask = {
   case_id: string;
   title: string;
   description: string;
+  task_type:
+    | "general"
+    | "similar_case_search"
+    | "regulation_search"
+    | "document_review"
+    | "document_drafting"
+    | "client_reply"
+    | "reasoning";
   status: string;
   priority: string;
   assigned_agent_role?: string | null;
+  due_at?: string | null;
+  depends_on_task_ids: string[];
+  document_id?: string | null;
+  base_revision_id?: string | null;
+  target_revision_id?: string | null;
+  output_document_id?: string | null;
+  output_revision_id?: string | null;
+  metadata: Record<string, unknown>;
   result_summary: string;
+  comments?: CaseTaskComment[];
+  research_results?: LegalResearchResult[];
+  blocked_by_task_ids?: string[];
+};
+
+export type CaseTaskComment = {
+  id: string;
+  case_id: string;
+  task_id: string;
+  message: string;
+  author_type: "owner" | "agent" | "system";
+  author_label: string;
+  created_at: string;
 };
 
 export type CaseMemory = {
@@ -187,6 +216,38 @@ export type LegalDocumentDiff = {
     target: string;
   }>;
   risk_summary: string[];
+};
+
+export type LegalResearchRun = {
+  id: string;
+  case_id: string;
+  task_id?: string | null;
+  search_type: "similar_case" | "regulation";
+  query: string;
+  keywords: string[];
+  status: "queued" | "completed" | "failed";
+  summary: string;
+  result_count: number;
+  failure_reason?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+};
+
+export type LegalResearchResult = {
+  id: string;
+  run_id: string;
+  case_id: string;
+  task_id?: string | null;
+  result_type: "similar_case" | "regulation";
+  title: string;
+  source: string;
+  reference: string;
+  court_or_authority: string;
+  relevance_score: number;
+  key_points: string[];
+  url?: string | null;
+  verified: boolean;
+  created_at: string;
 };
 
 export type ReasoningNode = {

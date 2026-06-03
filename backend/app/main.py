@@ -28,6 +28,7 @@ from app.models import (
     CaseCreateRequest,
     CaseMemory,
     CaseTask,
+    CaseTaskComment,
     CreateCaseFromConversationRequest,
     DocumentCreateRequest,
     FollowUpQuestion,
@@ -37,6 +38,8 @@ from app.models import (
     LegalDocumentBranch,
     LegalDocumentDiff,
     LegalDocumentRevision,
+    LegalResearchResult,
+    LegalResearchRun,
     LegalReplyJob,
     LegalReasoningRun,
     MemoryCreateRequest,
@@ -49,7 +52,10 @@ from app.models import (
     ReplyJobCreateRequest,
     SendFollowUpRequest,
     SendMessageRequest,
+    TaskCommentCreateRequest,
     TaskCreateRequest,
+    TaskExecuteRequest,
+    TaskUpdateRequest,
     WechatContact,
     WechatConversation,
     WechatMessage,
@@ -642,7 +648,7 @@ def create_text_document(
         author_type=author_type,  # type: ignore[arg-type]
         change_summary=change_summary,
     )
-    document.current_revision_id = revision.id
+    create_default_branch_for_document(document, revision)
     store.add("legal_documents", document)
     store.add("legal_document_revisions", revision)
     return document
@@ -741,6 +747,447 @@ def build_long_reply_content(
 七、人工复核提示：
 本文件由系统根据案件记录生成，应由律师或办案人员复核事实来源、法律依据、证据完整性和表述边界后再对外使用。
 """
+
+
+def case_tasks(case_id: str) -> list[CaseTask]:
+    return sorted(
+        store.filter("case_tasks", CaseTask, case_id=case_id),
+        key=lambda item: item.created_at,
+        reverse=True,
+    )
+
+
+def task_comments(case_id: str, task_id: str | None = None) -> list[CaseTaskComment]:
+    comments = store.filter("case_task_comments", CaseTaskComment, case_id=case_id)
+    if task_id:
+        comments = [comment for comment in comments if comment.task_id == task_id]
+    return sorted(comments, key=lambda item: item.created_at)
+
+
+def research_runs(case_id: str) -> list[LegalResearchRun]:
+    return sorted(
+        store.filter("legal_research_runs", LegalResearchRun, case_id=case_id),
+        key=lambda item: item.created_at,
+        reverse=True,
+    )
+
+
+def research_results(case_id: str, task_id: str | None = None) -> list[LegalResearchResult]:
+    results = store.filter("legal_research_results", LegalResearchResult, case_id=case_id)
+    if task_id:
+        results = [result for result in results if result.task_id == task_id]
+    return sorted(results, key=lambda item: item.relevance_score, reverse=True)
+
+
+def get_case_task(case_id: str, task_id: str) -> CaseTask:
+    task = store.get("case_tasks", task_id, CaseTask)
+    if not task or task.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+def ensure_case_exists(case_id: str) -> Case:
+    case = store.get("cases", case_id, Case)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return case
+
+
+def add_task_comment(
+    *,
+    case_id: str,
+    task_id: str,
+    message: str,
+    author_type: str = "system",
+    author_label: str = "系统",
+) -> CaseTaskComment:
+    comment = CaseTaskComment(
+        case_id=case_id,
+        task_id=task_id,
+        message=message.strip(),
+        author_type=author_type,  # type: ignore[arg-type]
+        author_label=author_label,
+    )
+    store.add("case_task_comments", comment)
+    return comment
+
+
+def validate_task_dependencies(case_id: str, task_id: str, depends_on_task_ids: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for depends_on_id in depends_on_task_ids:
+        if depends_on_id == task_id:
+            raise HTTPException(status_code=409, detail="Task cannot depend on itself")
+        dependency = store.get("case_tasks", depends_on_id, CaseTask)
+        if not dependency or dependency.case_id != case_id:
+            raise HTTPException(status_code=404, detail=f"Dependency task not found: {depends_on_id}")
+        if depends_on_id not in normalized:
+            normalized.append(depends_on_id)
+    return normalized
+
+
+def blocked_by_task_ids(case_id: str, task: CaseTask) -> list[str]:
+    blocked_ids = []
+    for depends_on_id in task.depends_on_task_ids:
+        dependency = store.get("case_tasks", depends_on_id, CaseTask)
+        if dependency and dependency.case_id == case_id and dependency.status != "done":
+            blocked_ids.append(depends_on_id)
+    return blocked_ids
+
+
+def task_to_detail(task: CaseTask) -> dict[str, object]:
+    payload = task.model_dump()
+    payload["comments"] = [comment.model_dump() for comment in task_comments(task.case_id, task.id)]
+    payload["research_results"] = [
+        result.model_dump() for result in research_results(task.case_id, task.id)
+    ]
+    payload["blocked_by_task_ids"] = blocked_by_task_ids(task.case_id, task)
+    return payload
+
+
+def extract_research_keywords(case: Case, query: str, memories: list[CaseMemory]) -> list[str]:
+    source = " ".join([case.title, case.summary, query, *[memory.content for memory in memories[:8]]])
+    candidates = [
+        "劳动合同",
+        "拖欠工资",
+        "被迫离职",
+        "合同解除",
+        "违约责任",
+        "付款期限",
+        "借款",
+        "诉讼时效",
+        "股权",
+        "交通事故",
+        "离婚",
+        "抚养",
+        "房屋买卖",
+        "刑事拘留",
+        "证据",
+        "仲裁",
+        "管辖",
+        "违约金",
+    ]
+    keywords = [item for item in candidates if item in source]
+    if case.case_type == "labor":
+        keywords.extend(["劳动争议", "工资支付", "劳动仲裁"])
+    elif case.case_type == "contract":
+        keywords.extend(["合同纠纷", "履行期限", "违约责任"])
+    elif case.case_type == "debt":
+        keywords.extend(["民间借贷", "借款合意", "转账凭证"])
+    elif case.case_type == "company":
+        keywords.extend(["公司商事", "股东权利", "公司决议"])
+    elif case.case_type == "criminal":
+        keywords.extend(["刑事程序", "取保候审", "证据合法性"])
+    else:
+        keywords.append(case_type_label(case.case_type))
+    seen: set[str] = set()
+    return [item for item in keywords if not (item in seen or seen.add(item))][:8]
+
+
+def fallback_similar_case_results(
+    *,
+    run: LegalResearchRun,
+    case: Case,
+    keywords: list[str],
+) -> list[LegalResearchResult]:
+    topic = "、".join(keywords[:3]) or case_type_label(case.case_type)
+    return [
+        LegalResearchResult(
+            run_id=run.id,
+            case_id=case.id,
+            task_id=run.task_id,
+            result_type="similar_case",
+            title=f"{case_type_label(case.case_type)}类案方向：{topic}",
+            source="类案检索任务",
+            reference="裁判规则方向，需接入正式案例库后核验案号与裁判日期",
+            court_or_authority="人民法院裁判文书/案例库",
+            relevance_score=0.86,
+            key_points=[
+                "优先检索事实结构、请求基础和证据缺口相近的裁判。",
+                "比对法院对证明责任、关键证据和金额计算的处理方式。",
+                "标记对本案不利的裁判理由，供主任律师复核。",
+            ],
+        ),
+        LegalResearchResult(
+            run_id=run.id,
+            case_id=case.id,
+            task_id=run.task_id,
+            result_type="similar_case",
+            title=f"{topic}争议焦点与举证责任类案",
+            source="类案检索任务",
+            reference="裁判规则方向，待人工核验",
+            court_or_authority="基层/中级人民法院",
+            relevance_score=0.78,
+            key_points=[
+                "关注法院是否要求提交合同、聊天记录、流水、通知文件等直接证据。",
+                "关注对时效、通知、解除、违约金调整等抗辩的采纳标准。",
+            ],
+        ),
+    ]
+
+
+def fallback_regulation_results(
+    *,
+    run: LegalResearchRun,
+    case: Case,
+    keywords: list[str],
+) -> list[LegalResearchResult]:
+    base_points = {
+        "labor": ["劳动报酬支付", "解除/离职事实", "劳动仲裁时效"],
+        "contract": ["合同成立与履行", "违约责任", "解除与争议解决"],
+        "debt": ["借贷合意", "款项交付", "诉讼时效"],
+        "company": ["公司决议效力", "股东权利", "交易授权"],
+        "criminal": ["强制措施", "证据合法性", "程序节点"],
+    }.get(case.case_type, ["法律关系识别", "请求基础", "证据与时效"])
+    topic = "、".join(keywords[:3]) or case_type_label(case.case_type)
+    return [
+        LegalResearchResult(
+            run_id=run.id,
+            case_id=case.id,
+            task_id=run.task_id,
+            result_type="regulation",
+            title=f"{case_type_label(case.case_type)}法规检索方向：{topic}",
+            source="法规检索任务",
+            reference="法律、司法解释、部门规章及地方规则方向，需人工核验现行有效性",
+            court_or_authority="全国人大/最高人民法院/主管部门",
+            relevance_score=0.88,
+            key_points=[f"核对{point}相关条文。" for point in base_points],
+        ),
+        LegalResearchResult(
+            run_id=run.id,
+            case_id=case.id,
+            task_id=run.task_id,
+            result_type="regulation",
+            title="程序与时效规则核验",
+            source="法规检索任务",
+            reference="诉讼/仲裁/行政程序规则方向，待人工核验",
+            court_or_authority="最高人民法院及主管机构",
+            relevance_score=0.72,
+            key_points=[
+                "核对管辖、期间、送达、证据提交和保全规则。",
+                "如涉及劳动、交通、刑事等特别程序，应优先核验专门规则。",
+            ],
+        ),
+    ]
+
+
+def execute_research_task(case: Case, task: CaseTask, payload: TaskExecuteRequest) -> CaseTask:
+    query = (payload.query or task.metadata.get("query") or task.description or case.summary or case.title).strip()
+    search_type = "similar_case" if task.task_type == "similar_case_search" else "regulation"
+    keywords = payload.keywords or extract_research_keywords(case, query, case_memories(case.id))
+    run = LegalResearchRun(
+        case_id=case.id,
+        task_id=task.id,
+        search_type=search_type,  # type: ignore[arg-type]
+        query=query,
+        keywords=keywords,
+    )
+    store.add("legal_research_runs", run)
+    results = (
+        fallback_similar_case_results(run=run, case=case, keywords=keywords)
+        if search_type == "similar_case"
+        else fallback_regulation_results(run=run, case=case, keywords=keywords)
+    )
+    for result in results:
+        store.add("legal_research_results", result)
+    run.status = "completed"
+    run.result_count = len(results)
+    run.summary = f"已形成{len(results)}条{('类案' if search_type == 'similar_case' else '法规')}检索方向，关键词：{'、'.join(keywords)}。"
+    run.completed_at = now_iso()
+    store.update("legal_research_runs", run)
+    task.status = "waiting_owner_review"
+    task.result_summary = run.summary
+    task.metadata = {**task.metadata, "research_run_id": run.id, "keywords": keywords, "query": query}
+    task.updated_at = now_iso()
+    store.update("case_tasks", task)
+    store.add(
+        "case_memories",
+        CaseMemory(
+            case_id=case.id,
+            kind="note",
+            content=f"{task.title}：{run.summary}",
+            confidence=0.72,
+            source_ref=run.id,
+        ),
+    )
+    add_task_comment(case_id=case.id, task_id=task.id, message=run.summary)
+    return task
+
+
+def build_document_draft_content(case: Case, task: CaseTask, payload: TaskExecuteRequest) -> str:
+    if payload.content_text and payload.content_text.strip():
+        return payload.content_text.strip()
+    memories = case_memories(case.id)
+    facts = [memory.content for memory in memories if memory.kind in {"fact", "timeline", "evidence"}]
+    uncertainties = [memory.content for memory in memories if memory.kind == "uncertainty"]
+    research = research_results(case.id)
+    research_lines = []
+    for result in research[:4]:
+        points = "；".join(result.key_points[:2])
+        research_lines.append(f"- {result.title}：{points}")
+    facts_text = "\n".join(f"- {item}" for item in facts[:8]) or "- 暂无充分事实记录。"
+    uncertainty_text = "\n".join(f"- {item}" for item in uncertainties[:5]) or "- 暂未登记重大不确定点。"
+    research_text = "\n".join(research_lines) or "- 暂无检索结果，建议先执行类案或法规检索任务。"
+    return f"""文书草稿：{payload.title or task.title}
+案件名称：{case.title}
+案件类型：{case_type_label(case.case_type)}
+
+一、事实基础
+{facts_text}
+
+二、法律与类案检索参考
+{research_text}
+
+三、初步处理意见
+{case_rule_hint(case.case_type)}
+结合现有材料，建议先确认关键事实、证据完整性和客户目标，再确定正式对外文本。
+
+四、风险与待补充事项
+{uncertainty_text}
+
+五、人工复核
+本草稿由文档撰写任务生成，应由律师复核事实来源、法律依据、证据引用和表述边界后再提交或发送。
+"""
+
+
+def execute_document_review_task(case: Case, task: CaseTask, payload: TaskExecuteRequest) -> CaseTask:
+    document_id = payload.document_id or task.document_id
+    if not document_id:
+        raise HTTPException(status_code=422, detail="document_id is required for document review")
+    document = store.get("legal_documents", document_id, LegalDocument)
+    if not document or document.case_id not in {None, case.id}:
+        raise HTTPException(status_code=404, detail="Document not found")
+    revisions = sorted(
+        store.filter("legal_document_revisions", LegalDocumentRevision, document_id=document_id),
+        key=lambda item: item.version_number,
+    )
+    if len(revisions) < 2 and not (payload.base_revision_id or task.base_revision_id):
+        raise HTTPException(status_code=422, detail="At least two revisions are required for document review")
+    base_id = payload.base_revision_id or task.base_revision_id or revisions[-2].id
+    target_id = payload.target_revision_id or task.target_revision_id or revisions[-1].id
+    base = store.get("legal_document_revisions", base_id, LegalDocumentRevision)
+    target = store.get("legal_document_revisions", target_id, LegalDocumentRevision)
+    if not base or base.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Base revision not found")
+    if not target or target.document_id != document_id:
+        raise HTTPException(status_code=404, detail="Target revision not found")
+    diff = LegalDocumentDiff(
+        document_id=document.id,
+        base_revision_id=base.id,
+        target_revision_id=target.id,
+        segments=build_char_diff(base.content_text, target.content_text),
+        paragraph_changes=build_paragraph_diff(base.content_text, target.content_text),
+        risk_summary=summarize_legal_risks(base.content_text, target.content_text),
+    )
+    existing_diff = store.filter(
+        "legal_document_diffs",
+        LegalDocumentDiff,
+        document_id=document.id,
+        base_revision_id=base.id,
+        target_revision_id=target.id,
+    )
+    if existing_diff:
+        diff = existing_diff[-1]
+    else:
+        store.add("legal_document_diffs", diff)
+    existing_analysis = store.filter(
+        "legal_document_analyses",
+        LegalDocumentAnalysis,
+        document_id=document.id,
+        base_revision_id=base.id,
+        target_revision_id=target.id,
+    )
+    analysis = existing_analysis[-1] if existing_analysis else LegalDocumentAnalysis(
+        document_id=document.id,
+        base_revision_id=base.id,
+        target_revision_id=target.id,
+        source="rule_fallback",
+        risk_level="medium" if diff.risk_summary else "low",
+        ambiguities=["发现文本变化，请人工核对是否影响权利义务、履行期限或争议解决。"] if diff.risk_summary else [],
+        risk_points=diff.risk_summary,
+        suggestions=["建议逐条核对版本差异，并确认是否需要回退、接受或另开修订分支。"],
+        manual_review_checklist=[
+            "核对变更是否影响金额、期限、责任、解除、管辖或争议解决。",
+            "核对删除内容是否弱化我方权利或扩大对方免责。",
+            "核对新增内容是否需要客户确认或主任律师复核。",
+        ],
+    )
+    if not existing_analysis:
+        store.add("legal_document_analyses", analysis)
+    task.status = "waiting_owner_review"
+    task.document_id = document.id
+    task.base_revision_id = base.id
+    task.target_revision_id = target.id
+    task.result_summary = f"已审查 {document.title} v{base.version_number} -> v{target.version_number}，风险等级：{analysis.risk_level}，风险点 {len(analysis.risk_points)} 项。"
+    task.metadata = {**task.metadata, "diff_id": diff.id, "analysis_id": analysis.id}
+    task.updated_at = now_iso()
+    store.update("case_tasks", task)
+    add_task_comment(case_id=case.id, task_id=task.id, message=task.result_summary)
+    return task
+
+
+def execute_document_drafting_task(case: Case, task: CaseTask, payload: TaskExecuteRequest) -> CaseTask:
+    content = build_document_draft_content(case, task, payload)
+    document_id = payload.document_id or task.document_id
+    title = str(payload.title or task.metadata.get("title") or f"{task.title} 草稿")
+    change_summary = payload.change_summary or f"文档撰写任务 {task.id} 生成草稿"
+    draft_branch_name = "main"
+    if document_id:
+        document = store.get("legal_documents", document_id, LegalDocument)
+        if not document or document.case_id not in {None, case.id}:
+            raise HTTPException(status_code=404, detail="Document not found")
+        revisions = sorted(
+            store.filter("legal_document_revisions", LegalDocumentRevision, document_id=document.id),
+            key=lambda item: item.version_number,
+        )
+        base_revision_id = payload.base_revision_id or task.base_revision_id or document.current_revision_id or (revisions[-1].id if revisions else None)
+        if not base_revision_id:
+            raise HTTPException(status_code=422, detail="Base revision is required")
+        branch_name = f"draft/{task.id.replace('task_', '')[:8]}"
+        draft_branch_name = branch_name
+        branches = document_branches(document.id)
+        branch = next((item for item in branches if item.name == branch_name), None)
+        if not branch:
+            base_revision = store.get("legal_document_revisions", base_revision_id, LegalDocumentRevision)
+            if not base_revision or base_revision.document_id != document.id:
+                raise HTTPException(status_code=404, detail="Base revision not found")
+            branch = LegalDocumentBranch(
+                document_id=document.id,
+                name=branch_name,
+                head_revision_id=base_revision.id,
+                base_revision_id=base_revision.id,
+            )
+            store.add("legal_document_branches", branch)
+        revision = create_revision_on_branch(
+            document=document,
+            branch=branch,
+            content_text=content,
+            source_filename=f"{title}.docx",
+            author_type="agent",
+            change_summary=change_summary,
+        )
+    else:
+        document = create_text_document(
+            case_id=case.id,
+            title=title,
+            document_type="pleading",
+            content_text=content,
+            source_filename=f"{title}.docx",
+            change_summary=change_summary,
+            author_type="agent",
+        )
+        revision = latest_document_revision(document.id)
+        if not revision:
+            raise HTTPException(status_code=500, detail="Draft revision was not created")
+    task.status = "waiting_owner_review"
+    task.output_document_id = document.id
+    task.output_revision_id = revision.id
+    task.document_id = document.id
+    task.result_summary = f"已生成文书草稿：{document.title}，版本 v{revision.version_number}。"
+    task.metadata = {**task.metadata, "draft_branch": draft_branch_name}
+    task.updated_at = now_iso()
+    store.update("case_tasks", task)
+    add_task_comment(case_id=case.id, task_id=task.id, message=task.result_summary)
+    return task
 
 
 def build_agent_architecture() -> AgentArchitecture:
@@ -1167,7 +1614,10 @@ async def get_case(case_id: str) -> dict[str, object]:
         raise HTTPException(status_code=404, detail="Case not found")
     return {
         "case": case,
-        "tasks": store.filter("case_tasks", CaseTask, case_id=case_id),
+        "tasks": [task_to_detail(task) for task in case_tasks(case_id)],
+        "task_comments": task_comments(case_id),
+        "research_runs": research_runs(case_id),
+        "research_results": research_results(case_id),
         "memories": store.filter("case_memories", CaseMemory, case_id=case_id),
         "documents": store.filter("legal_documents", LegalDocument, case_id=case_id),
         "reasoning_runs": store.filter("legal_reasoning_runs", LegalReasoningRun, case_id=case_id),
@@ -1188,6 +1638,9 @@ async def delete_case(case_id: str) -> dict[str, object]:
     for document in store.filter("legal_documents", LegalDocument, case_id=case_id):
         delete_document_rows(document.id)
     store.remove_where("case_tasks", lambda row: row.get("case_id") == case_id)
+    store.remove_where("case_task_comments", lambda row: row.get("case_id") == case_id)
+    store.remove_where("legal_research_runs", lambda row: row.get("case_id") == case_id)
+    store.remove_where("legal_research_results", lambda row: row.get("case_id") == case_id)
     store.remove_where("case_memories", lambda row: row.get("case_id") == case_id)
     store.remove_where("legal_reasoning_runs", lambda row: row.get("case_id") == case_id)
     store.remove_where("follow_up_questions", lambda row: row.get("case_id") == case_id)
@@ -1206,20 +1659,139 @@ async def delete_case(case_id: str) -> dict[str, object]:
 
 @app.post("/api/cases/{case_id}/tasks")
 async def create_task(case_id: str, payload: TaskCreateRequest) -> CaseTask:
-    if not store.get("cases", case_id, Case):
-        raise HTTPException(status_code=404, detail="Case not found")
+    ensure_case_exists(case_id)
     task = CaseTask(case_id=case_id, **payload.model_dump())
+    task.depends_on_task_ids = validate_task_dependencies(case_id, task.id, task.depends_on_task_ids)
     store.add("case_tasks", task)
+    if task.description.strip():
+        add_task_comment(
+            case_id=case_id,
+            task_id=task.id,
+            message=f"任务说明：{task.description.strip()}",
+            author_type="system",
+            author_label="任务中心",
+        )
     record("case.task.created", "创建案件任务", task.title, entity_type="case", entity_id=case_id)
     return task
 
 
+@app.patch("/api/cases/{case_id}/tasks/{task_id}")
+async def update_task(case_id: str, task_id: str, payload: TaskUpdateRequest) -> CaseTask:
+    ensure_case_exists(case_id)
+    task = get_case_task(case_id, task_id)
+    updates = payload.model_dump(exclude_unset=True)
+    comment = updates.pop("comment", None)
+    if "depends_on_task_ids" in updates and updates["depends_on_task_ids"] is not None:
+        updates["depends_on_task_ids"] = validate_task_dependencies(
+            case_id,
+            task_id,
+            updates["depends_on_task_ids"],
+        )
+    target_status = updates.get("status")
+    if target_status and target_status not in {"todo", "blocked", task.status, "done"}:
+        blocking = blocked_by_task_ids(case_id, task)
+        if blocking:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Task is blocked by incomplete dependencies.",
+                    "blocked_by_task_ids": blocking,
+                },
+            )
+    if target_status == "done":
+        blocking = blocked_by_task_ids(case_id, task)
+        if blocking:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Task cannot be completed before dependencies are done.",
+                    "blocked_by_task_ids": blocking,
+                },
+            )
+    for field, value in updates.items():
+        setattr(task, field, value)
+    task.updated_at = now_iso()
+    store.update("case_tasks", task)
+    if comment and str(comment).strip():
+        add_task_comment(case_id=case_id, task_id=task_id, message=str(comment), author_type="owner", author_label="人工")
+    record("case.task.updated", "更新案件任务", task.title, entity_type="case", entity_id=case_id)
+    return task
+
+
+@app.get("/api/cases/{case_id}/tasks/{task_id}/comments")
+async def list_task_comments(case_id: str, task_id: str) -> list[CaseTaskComment]:
+    ensure_case_exists(case_id)
+    get_case_task(case_id, task_id)
+    return task_comments(case_id, task_id)
+
+
+@app.post("/api/cases/{case_id}/tasks/{task_id}/comments")
+async def create_task_comment(
+    case_id: str,
+    task_id: str,
+    payload: TaskCommentCreateRequest,
+) -> CaseTaskComment:
+    ensure_case_exists(case_id)
+    get_case_task(case_id, task_id)
+    if not payload.message.strip():
+        raise HTTPException(status_code=422, detail="Comment cannot be empty")
+    comment = add_task_comment(
+        case_id=case_id,
+        task_id=task_id,
+        message=payload.message,
+        author_type=payload.author_type,
+        author_label=payload.author_label,
+    )
+    record("case.task.comment", "记录任务评论", payload.message[:120], entity_type="case", entity_id=case_id)
+    return comment
+
+
+@app.post("/api/cases/{case_id}/tasks/{task_id}/execute")
+async def execute_task(case_id: str, task_id: str, payload: TaskExecuteRequest | None = None) -> CaseTask:
+    case = ensure_case_exists(case_id)
+    task = get_case_task(case_id, task_id)
+    payload = payload or TaskExecuteRequest()
+    blocking = blocked_by_task_ids(case_id, task)
+    if blocking:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Task is blocked by incomplete dependencies.",
+                "blocked_by_task_ids": blocking,
+            },
+        )
+    task.status = "in_progress"
+    task.updated_at = now_iso()
+    store.update("case_tasks", task)
+    if task.task_type in {"similar_case_search", "regulation_search"}:
+        executed = execute_research_task(case, task, payload)
+    elif task.task_type == "document_review":
+        executed = execute_document_review_task(case, task, payload)
+    elif task.task_type == "document_drafting":
+        executed = execute_document_drafting_task(case, task, payload)
+    else:
+        task.status = "done"
+        task.result_summary = task.result_summary or "通用任务已标记完成。"
+        task.updated_at = now_iso()
+        store.update("case_tasks", task)
+        add_task_comment(case_id=case_id, task_id=task_id, message=task.result_summary)
+        executed = task
+    record("case.task.executed", "执行案件任务", executed.title, entity_type="case", entity_id=case_id)
+    return executed
+
+
 @app.delete("/api/cases/{case_id}/tasks/{task_id}")
 async def delete_task(case_id: str, task_id: str) -> dict[str, object]:
-    task = store.get("case_tasks", task_id, CaseTask)
-    if not task or task.case_id != case_id:
-        raise HTTPException(status_code=404, detail="Task not found")
+    task = get_case_task(case_id, task_id)
     store.delete("case_tasks", task_id)
+    store.remove_where("case_task_comments", lambda row: row.get("task_id") == task_id)
+    store.remove_where("legal_research_runs", lambda row: row.get("task_id") == task_id)
+    store.remove_where("legal_research_results", lambda row: row.get("task_id") == task_id)
+    for other in store.filter("case_tasks", CaseTask, case_id=case_id):
+        if task_id in other.depends_on_task_ids:
+            other.depends_on_task_ids = [item for item in other.depends_on_task_ids if item != task_id]
+            other.updated_at = now_iso()
+            store.update("case_tasks", other)
     record("case.task.deleted", "删除案件任务", task.title, entity_type="case", entity_id=case_id)
     return {"ok": True}
 

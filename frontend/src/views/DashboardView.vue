@@ -1,7 +1,7 @@
 <template>
   <PageHeader title="总览" description="四大核心能力集成在同一个个人法律智能工作台内。">
     <button class="button" @click="load">刷新</button>
-    <RouterLink class="button primary" to="/wechat">进入微信工作台</RouterLink>
+    <RouterLink class="button primary" to="/wechat">进入客户工作台</RouterLink>
   </PageHeader>
 
   <section class="page-content">
@@ -18,7 +18,7 @@
       <div class="mission-metrics">
         <div>
           <strong>{{ numberOf("conversations") }}</strong>
-          <span>微信会话</span>
+          <span>客户会话</span>
         </div>
         <div>
           <strong>{{ numberOf("open_cases") }}</strong>
@@ -50,28 +50,14 @@
       </RouterLink>
     </section>
 
-    <div class="grid cols-2" style="margin-top: 16px">
-      <section class="panel">
-        <h2 class="panel-title">微信消息桥</h2>
-        <p class="panel-subtitle">本系统读取聊天记录、同步状态，并通过微信桥发送电脑端消息。</p>
-        <div class="system-row">
-          <span class="status-dot" :class="openclawOnline ? 'online' : 'warning'"></span>
-          <div>
-            <strong>{{ openclawOnline ? "可连接" : "待配置" }}</strong>
-            <div class="muted small">{{ localizeText(openclawMessage) }}</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2 class="panel-title">最近活动</h2>
-        <p class="panel-subtitle">微信同步、建案、文件版本和推理生成在这里汇总。</p>
-        <div v-for="event in activity.slice(0, 5)" :key="event.id" class="list-item compact">
-          <strong>{{ localizeText(event.title) }}</strong>
-          <div class="muted small">{{ localizeText(event.description || event.event_type) }}</div>
-        </div>
-      </section>
-    </div>
+    <section class="panel" style="margin-top: 16px">
+      <h2 class="panel-title">最近活动</h2>
+      <p class="panel-subtitle">客户同步、建案、文件版本和推理生成在这里汇总。</p>
+      <div v-for="event in activity.slice(0, 5)" :key="event.id" class="list-item compact">
+        <strong>{{ localizeText(event.title) }}</strong>
+        <div class="muted small">{{ localizeText(event.description || event.event_type) }}</div>
+      </div>
+    </section>
   </section>
 </template>
 
@@ -94,12 +80,12 @@ type BadgeTone = "blue" | "green" | "amber" | "red" | "slate";
 
 const modules = computed(() => [
   {
-    title: "1. 微信接入",
-    description: "读取微信会话、同步聊天、电脑端通过微信桥发消息。",
+    title: "1. 客户接入",
+    description: "读取客户会话、同步聊天、电脑端通过微信桥发消息。",
     metric: `${numberOf("conversations")} 个会话 / ${numberOf("messages")} 条消息`,
     status: openclawOnline.value ? "已连接" : "待配置",
     tone: (openclawOnline.value ? "green" : "amber") as BadgeTone,
-    action: "打开微信工作台",
+    action: "打开客户工作台",
     to: "/wechat",
     icon: MessageCircle,
   },
@@ -148,7 +134,7 @@ function localizeText(value: unknown) {
   return String(value ?? "")
     .replaceAll("OpenClaw", "微信桥")
     .replaceAll("Gateway", "网关")
-    .replaceAll("wechat.synced", "微信已同步")
+    .replaceAll("wechat.synced", "客户已同步")
     .replaceAll("case.created", "案件已创建")
     .replaceAll("conversation", "会话")
     .replaceAll("case", "案件");

@@ -130,6 +130,15 @@ class CaseTask(BaseModel):
     case_id: str
     title: str
     description: str = ""
+    task_type: Literal[
+        "general",
+        "similar_case_search",
+        "regulation_search",
+        "document_review",
+        "document_drafting",
+        "client_reply",
+        "reasoning",
+    ] = "general"
     status: Literal[
         "todo",
         "in_progress",
@@ -140,9 +149,27 @@ class CaseTask(BaseModel):
     ] = "todo"
     priority: Literal["low", "medium", "high", "urgent"] = "medium"
     assigned_agent_role: str | None = None
+    due_at: str | None = None
+    depends_on_task_ids: list[str] = Field(default_factory=list)
+    document_id: str | None = None
+    base_revision_id: str | None = None
+    target_revision_id: str | None = None
+    output_document_id: str | None = None
+    output_revision_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     result_summary: str = ""
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
+
+
+class CaseTaskComment(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("comment"))
+    case_id: str
+    task_id: str
+    message: str
+    author_type: Literal["owner", "agent", "system"] = "owner"
+    author_label: str = "人工"
+    created_at: str = Field(default_factory=now_iso)
 
 
 class CaseMemory(BaseModel):
@@ -259,6 +286,38 @@ class LegalDocumentDiff(BaseModel):
     segments: list[DiffSegment]
     paragraph_changes: list[ParagraphChange]
     risk_summary: list[str]
+    created_at: str = Field(default_factory=now_iso)
+
+
+class LegalResearchRun(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("research"))
+    case_id: str
+    task_id: str | None = None
+    search_type: Literal["similar_case", "regulation"]
+    query: str
+    keywords: list[str] = Field(default_factory=list)
+    status: Literal["queued", "completed", "failed"] = "queued"
+    summary: str = ""
+    result_count: int = 0
+    failure_reason: str | None = None
+    created_at: str = Field(default_factory=now_iso)
+    completed_at: str | None = None
+
+
+class LegalResearchResult(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("result"))
+    run_id: str
+    case_id: str
+    task_id: str | None = None
+    result_type: Literal["similar_case", "regulation"]
+    title: str
+    source: str = ""
+    reference: str = ""
+    court_or_authority: str = ""
+    relevance_score: float = 0.75
+    key_points: list[str] = Field(default_factory=list)
+    url: str | None = None
+    verified: bool = False
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -411,8 +470,50 @@ class CaseCreateRequest(BaseModel):
 class TaskCreateRequest(BaseModel):
     title: str
     description: str = ""
+    task_type: CaseTask.model_fields["task_type"].annotation = "general"
+    status: CaseTask.model_fields["status"].annotation = "todo"
     assigned_agent_role: str | None = None
     priority: CaseTask.model_fields["priority"].annotation = "medium"
+    due_at: str | None = None
+    depends_on_task_ids: list[str] = Field(default_factory=list)
+    document_id: str | None = None
+    base_revision_id: str | None = None
+    target_revision_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskUpdateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    task_type: CaseTask.model_fields["task_type"].annotation | None = None
+    status: CaseTask.model_fields["status"].annotation | None = None
+    assigned_agent_role: str | None = None
+    priority: CaseTask.model_fields["priority"].annotation | None = None
+    due_at: str | None = None
+    depends_on_task_ids: list[str] | None = None
+    document_id: str | None = None
+    base_revision_id: str | None = None
+    target_revision_id: str | None = None
+    metadata: dict[str, Any] | None = None
+    result_summary: str | None = None
+    comment: str | None = None
+
+
+class TaskCommentCreateRequest(BaseModel):
+    message: str
+    author_type: CaseTaskComment.model_fields["author_type"].annotation = "owner"
+    author_label: str = "人工"
+
+
+class TaskExecuteRequest(BaseModel):
+    query: str | None = None
+    keywords: list[str] = Field(default_factory=list)
+    content_text: str | None = None
+    title: str | None = None
+    document_id: str | None = None
+    base_revision_id: str | None = None
+    target_revision_id: str | None = None
+    change_summary: str | None = None
 
 
 class MemoryCreateRequest(BaseModel):

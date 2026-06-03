@@ -1,7 +1,7 @@
 <template>
-  <PageHeader title="演示聊天记录" description="通过本地 JSON 和上传文件模拟微信会话，用于演示与测试。">
-    <button class="button" @click="syncToStore">同步到微信接入</button>
-    <RouterLink class="button primary" to="/wechat">打开微信接入</RouterLink>
+  <PageHeader title="演示聊天记录" description="通过本地 JSON 和上传文件模拟客户会话，用于演示与测试。">
+    <button class="button" @click="syncToStore">同步到客户接入</button>
+    <RouterLink class="button primary" to="/wechat">打开客户接入</RouterLink>
   </PageHeader>
   <section class="page-content">
     <div class="split">

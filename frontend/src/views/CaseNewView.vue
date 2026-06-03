@@ -1,5 +1,5 @@
 <template>
-  <PageHeader title="新建案件" description="手动创建独立案件，也可以稍后绑定微信会话和文件。">
+  <PageHeader title="新建案件" description="手动创建独立案件，也可以稍后绑定客户会话和文件。">
     <RouterLink class="button" to="/cases">返回案件</RouterLink>
   </PageHeader>
   <section class="page-content">
