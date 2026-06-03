@@ -89,6 +89,7 @@ class WechatMessage(BaseModel):
         "failed",
         "ignored",
     ] = "synced"
+    source: Literal["mock", "manual"] | None = None
     openclaw_message_id: str | None = None
     created_at: str = Field(default_factory=now_iso)
     raw_payload: dict[str, Any] | None = None

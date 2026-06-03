@@ -1,38 +1,56 @@
 [
   {
-    "id": "conv_745708197a81",
-    "openclaw_conversation_id": "mock_conv_745708197a81",
-    "contact_id": "contact_1ded64dd203b",
+    "id": "conv_guiding_case_269",
+    "openclaw_conversation_id": "mock_conv_guiding_case_269",
+    "contact_id": "contact_liumoujiang_family",
     "case_id": null,
     "status": "open",
     "auto_reply_source": "openclaw",
-    "last_message_at": "2026-06-01T07:02:21.170328+00:00",
+    "last_message_at": "2026-06-03T01:26:51.615977+00:00",
     "unread_count": 0,
     "contact": {
-      "id": "contact_1ded64dd203b",
-      "openclaw_contact_id": "mock_contact_1ded64dd203b",
-      "display_name": "王雨晨",
-      "remark": "6666",
+      "id": "contact_liumoujiang_family",
+      "openclaw_contact_id": "mock_contact_liumoujiang_family",
+      "display_name": "刘某江家属",
+      "remark": "交通肇事无罪咨询",
       "avatar_url": null,
-      "last_seen_at": "2026-06-01T07:01:29.772721+00:00"
+      "last_seen_at": "2026-06-03T01:40:00+00:00"
     }
   },
   {
-    "id": "conv_71474f36fb0d",
-    "openclaw_conversation_id": "mock_conv_71474f36fb0d",
-    "contact_id": "contact_9a552f64b6fe",
+    "id": "conv_f5bb4132c3ba",
+    "openclaw_conversation_id": "mock_conv_f5bb4132c3ba",
+    "contact_id": "contact_b85fb3edf3d1",
     "case_id": null,
     "status": "open",
     "auto_reply_source": "openclaw",
-    "last_message_at": "2026-06-01T07:25:02.907829+00:00",
+    "last_message_at": "2026-06-03T01:28:33.082229+00:00",
     "unread_count": 0,
     "contact": {
-      "id": "contact_9a552f64b6fe",
-      "openclaw_contact_id": "mock_contact_9a552f64b6fe",
-      "display_name": "张先生",
+      "id": "contact_b85fb3edf3d1",
+      "openclaw_contact_id": "mock_contact_b85fb3edf3d1",
+      "display_name": "L某家属",
+      "remark": "交通肇事案",
+      "avatar_url": null,
+      "last_seen_at": "2026-06-03T00:39:49.499078+00:00"
+    }
+  },
+  {
+    "id": "conv_5acfce59bc2a",
+    "openclaw_conversation_id": "mock_conv_5acfce59bc2a",
+    "contact_id": "contact_425f25087f25",
+    "case_id": null,
+    "status": "open",
+    "auto_reply_source": "openclaw",
+    "last_message_at": "2026-06-03T01:27:21.602703+00:00",
+    "unread_count": 0,
+    "contact": {
+      "id": "contact_425f25087f25",
+      "openclaw_contact_id": "mock_contact_425f25087f25",
+      "display_name": "测试",
       "remark": "测试",
       "avatar_url": null,
-      "last_seen_at": "2026-06-01T07:25:02.907844+00:00"
+      "last_seen_at": "2026-06-03T01:27:21.602728+00:00"
     }
   }
 ]

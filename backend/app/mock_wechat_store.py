@@ -151,6 +151,7 @@ class MockWechatStore:
         sender: str,
         content: str,
         attachments: list[dict[str, Any]] | None = None,
+        source: str | None = None,
     ) -> dict[str, Any]:
         if sender not in {"wechat_user", "owner"}:
             direction = "internal"
@@ -197,6 +198,7 @@ class MockWechatStore:
             "content": content or "",
             "attachments": attachment_list,
             "status": status,
+            "source": source,
             "openclaw_message_id": None,
             "created_at": now_iso(),
             "raw_payload": None,

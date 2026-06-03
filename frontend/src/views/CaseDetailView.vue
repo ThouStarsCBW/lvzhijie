@@ -284,7 +284,7 @@
         :class="['message', message.direction === 'outbound' && 'outbound']"
       >
         <div>{{ message.content }}</div>
-        <div class="message-meta">{{ senderLabel(message.sender) }} · {{ messageStatusLabel(message.status) }}</div>
+        <div class="message-meta">{{ messageLabel(message) }}</div>
       </div>
       <div v-if="!detail.messages.length" class="empty-state">此案件尚未绑定微信聊天。</div>
     </section>
@@ -635,7 +635,18 @@ function messageStatusLabel(status: string) {
     openclaw_auto_replied: "微信桥已自动回复",
     pending: "待发送",
     failed: "发送失败",
+    sent_via_openclaw: "已通过微信桥发送",
   }[status] ?? status;
+}
+
+function messageLabel(message: { sender: string; status: string; source?: string | null }): string {
+  if (message.sender === "wechat_user") return "客户消息";
+  if (message.sender === "owner") {
+    if (message.source === "mock") return "AI短回复";
+    if (message.source === "manual") return "人工回复";
+    return "人工回复";
+  }
+  return `${senderLabel(message.sender)} · ${messageStatusLabel(message.status)}`;
 }
 
 function agentTitleLabel(value?: string | null) {

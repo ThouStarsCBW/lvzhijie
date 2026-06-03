@@ -709,6 +709,11 @@ button {
   border-color: #bfdbfe;
 }
 
+.typing-message {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .message-meta {
   margin-top: 5px;
   font-size: 11px;

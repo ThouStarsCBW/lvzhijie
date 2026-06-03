@@ -1019,6 +1019,7 @@ async def send_wechat_message(conversation_id: str, payload: SendMessageRequest)
             conversation_id=conversation_id,
             sender="owner",
             content=payload.content,
+            source="manual",
         )
         message = WechatMessage.model_validate(new_msg)
         mock_wechat.sync_to_json_store(store)
@@ -1389,6 +1390,7 @@ async def send_follow_up_question(
             conversation_id=conversation.id,
             sender="owner",
             content=content,
+            source="manual",
         )
         message = WechatMessage.model_validate(new_msg)
         mock_wechat.sync_to_json_store(store)
@@ -2269,6 +2271,7 @@ async def create_mock_message(
         sender=sender,
         content=content,
         attachments=attachments,
+        source="mock",
     )
     mock_wechat.sync_to_json_store(store)
     return new_msg

@@ -40,6 +40,9 @@
             <p class="panel-subtitle">电脑端发送会经由微信桥转发到微信。</p>
           </div>
           <div v-if="selected" class="page-actions">
+            <button class="button" :disabled="!selectedId || isPlaybackPlaying" @click="playMockScript">
+              {{ playbackButtonLabel }}
+            </button>
             <select v-if="!selected.case_id" v-model="bindCaseId" class="select" style="width: 180px">
               <option value="">绑定已有案件</option>
               <option v-for="item in cases" :key="item.id" :value="item.id">{{ item.title }}</option>
@@ -85,8 +88,15 @@
               </template>
             </div>
             <div class="message-meta">
-              {{ senderLabel(message.sender) }} · {{ statusLabel(message.status) }}
+              {{ messageLabel(message) }}
             </div>
+          </div>
+          <div
+            v-if="playbackHint"
+            aria-live="polite"
+            :class="['message', 'typing-message', playbackHintDirection === 'outbound' && 'outbound']"
+          >
+            <div class="message-text">{{ playbackHint }}</div>
           </div>
         </div>
         <div style="display: grid; grid-template-columns: 1fr auto; gap: 10px">
@@ -118,12 +128,25 @@ const syncOk = ref(true);
 const query = ref("");
 const bindCaseId = ref("");
 const creatingCase = ref(false);
+const playbackMessages = ref<WechatMessage[]>([]);
+const playbackHint = ref("");
+const playbackHintDirection = ref<"inbound" | "outbound" | "internal">("inbound");
+const isPlaybackPlaying = ref(false);
+const playbackFinished = ref(false);
+const playbackRunId = ref(0);
 
 const selected = computed(() => conversations.value.find((item) => item.id === selectedId.value));
+const visibleMessages = computed(() =>
+  isPlaybackPlaying.value || playbackMessages.value.length ? playbackMessages.value : messages.value,
+);
+const playbackButtonLabel = computed(() => {
+  if (isPlaybackPlaying.value) return "演示中...";
+  return playbackFinished.value ? "重新播放模拟咨询" : "播放模拟咨询";
+});
 const filteredMessages = computed(() => {
   const text = query.value.trim().toLowerCase();
-  if (!text) return messages.value;
-  return messages.value.filter((message) => {
+  if (!text) return visibleMessages.value;
+  return visibleMessages.value.filter((message) => {
     const attachmentText = (message.attachments ?? []).map((item) => item.name).join(" ");
     return `${message.content} ${attachmentText}`.toLowerCase().includes(text);
   });
@@ -153,12 +176,14 @@ async function load() {
 }
 
 async function select(id: string) {
+  resetPlayback();
   selectedId.value = id;
   messages.value = await api.conversationMessages(id);
 }
 
 async function send() {
   if (!selectedId.value || !draft.value.trim()) return;
+  resetPlayback();
   await api.sendWechatMessage(selectedId.value, draft.value.trim());
   draft.value = "";
   await select(selectedId.value);
@@ -189,6 +214,7 @@ async function bindCase() {
 async function deleteConversation(conversation: WechatConversation) {
   const label = conversation.contact?.display_name ?? conversation.openclaw_conversation_id;
   if (!confirm(`确定删除“${label}”这个会话及其聊天记录吗？`)) return;
+  resetPlayback();
   await api.deleteWechatConversation(conversation.id);
   if (selectedId.value === conversation.id) {
     selectedId.value = "";
@@ -201,6 +227,7 @@ async function deleteConversation(conversation: WechatConversation) {
 }
 
 async function sync() {
+  resetPlayback();
   const result = await api.syncOpenclaw();
   syncOk.value = Boolean(result.ok);
   const errors = Array.isArray(result.errors) ? result.errors : [];
@@ -208,6 +235,68 @@ async function sync() {
     ? `已同步 ${result.sessions ?? 0} 个会话、${result.messages ?? 0} 条消息。`
     : `微信桥同步未完成：${errors.join("; ") || "请检查网关配置"}`;
   await load();
+}
+
+async function playMockScript() {
+  if (!selectedId.value || isPlaybackPlaying.value) return;
+  const runId = playbackRunId.value + 1;
+  playbackRunId.value = runId;
+  query.value = "";
+  playbackMessages.value = [];
+  playbackHint.value = "";
+  playbackFinished.value = false;
+  isPlaybackPlaying.value = true;
+
+  const script = await api.conversationMessages(selectedId.value);
+  messages.value = script;
+
+  for (const message of script) {
+    if (playbackRunId.value !== runId) return;
+    playbackHint.value = playbackHintFor(message);
+    playbackHintDirection.value = playbackHintDirectionFor(message);
+    await sleep(playbackDelay(message));
+    if (playbackRunId.value !== runId) return;
+    playbackHint.value = "";
+    playbackMessages.value = [...playbackMessages.value, message];
+    await sleep(520);
+  }
+
+  if (playbackRunId.value !== runId) return;
+  isPlaybackPlaying.value = false;
+  playbackFinished.value = true;
+}
+
+function resetPlayback() {
+  playbackRunId.value += 1;
+  playbackMessages.value = [];
+  playbackHint.value = "";
+  playbackHintDirection.value = "inbound";
+  playbackFinished.value = false;
+  isPlaybackPlaying.value = false;
+}
+
+function playbackHintFor(message: WechatMessage) {
+  if (message.sender === "wechat_user") return "对方正在输入...";
+  if (message.sender === "owner") return "AI正在回复...";
+  return "正在同步消息...";
+}
+
+function playbackHintDirectionFor(message: WechatMessage) {
+  if (message.sender === "owner") return "outbound";
+  if (message.sender === "system") return "internal";
+  return "inbound";
+}
+
+function playbackDelay(message: WechatMessage) {
+  const base = message.sender === "owner" ? 1500 : 1200;
+  const perChar = message.sender === "owner" ? 12 : 10;
+  const max = message.sender === "owner" ? 4200 : 3200;
+  const textLength = `${message.content ?? ""}${message.attachments?.length ? "附件" : ""}`.length;
+  return Math.min(max, Math.max(1400, base + textLength * perChar));
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function senderLabel(sender: string) {
@@ -225,7 +314,18 @@ function statusLabel(status: string) {
     sent: "已发送",
     pending: "待发送",
     failed: "发送失败",
+    sent_via_openclaw: "已通过微信桥发送",
   }[status] ?? status;
+}
+
+function messageLabel(message: WechatMessage): string {
+  if (message.sender === "wechat_user") return "客户消息";
+  if (message.sender === "owner") {
+    if (message.source === "mock") return "AI短回复";
+    if (message.source === "manual") return "人工回复";
+    return "人工回复";
+  }
+  return `${senderLabel(message.sender)} · ${statusLabel(message.status)}`;
 }
 
 function autoReplyLabel(source: string) {

@@ -65,6 +65,7 @@ export type WechatMessage = {
   content: string;
   attachments?: WechatAttachment[];
   status: string;
+  source?: "mock" | "manual" | null;
   created_at: string;
 };
 
