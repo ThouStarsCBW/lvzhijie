@@ -195,7 +195,6 @@
               {{ memoryKindLabel(memory.kind) }}
             </Badge>
             <div style="margin-top: 8px">{{ memory.content }}</div>
-            <div class="muted small">置信度 {{ Math.round(memory.confidence * 100) }}%</div>
           </div>
           <button class="button danger" :disabled="deletingId === memory.id" @click="deleteMemory(memory.id)">
             {{ deletingId === memory.id ? "删除中" : confirmingId === memory.id ? "确认删除" : "删除" }}
@@ -313,8 +312,12 @@
           <Badge :tone="latestRun.status === 'needs_evidence' ? 'amber' : 'green'">
             {{ reasoningStatusLabel(latestRun.status) }}
           </Badge>
+          <Badge :tone="latestRun.generation_mode === 'llm' ? 'blue' : 'slate'">
+            {{ generationModeLabel(latestRun.generation_mode) }}
+          </Badge>
           <p class="muted small">{{ latestRun.output_summary }}</p>
           <p v-if="latestRun.blocked_reason" class="muted small">暂停点：{{ latestRun.blocked_reason }}</p>
+          <p v-for="warning in latestRun.validation_warnings" :key="warning" class="muted small">校验：{{ warning }}</p>
           <div class="agent-chip-row">
             <span v-for="item in latestRun.review_focus" :key="item" class="agent-chip">{{ item }}</span>
           </div>
@@ -325,13 +328,7 @@
           </button>
           <button v-if="confirmingId === latestRun.id" class="button" @click="confirmingId = ''">取消</button>
         </div>
-        <div v-if="latestRun" class="reasoning-canvas">
-          <article v-for="node in latestRun.nodes" :key="node.id" class="reasoning-node">
-            <Badge :tone="toneFor(node.node_type)">{{ nodeTypeLabel(node.node_type) }}</Badge>
-            <h3>{{ node.label }}</h3>
-            <p class="muted small">{{ node.content }}</p>
-          </article>
-        </div>
+        <ReasoningFlowchart v-if="latestRun" :run="latestRun" />
         <div v-else class="empty-state">尚未生成推理图。</div>
       </section>
 
@@ -389,6 +386,7 @@ import { useRoute, useRouter } from "vue-router";
 
 import Badge from "@/components/Badge.vue";
 import PageHeader from "@/components/PageHeader.vue";
+import ReasoningFlowchart from "@/components/ReasoningFlowchart.vue";
 import StatCard from "@/components/StatCard.vue";
 import { api } from "@/services/api";
 import type { CaseTask, LegalAgent } from "@/types";
@@ -800,19 +798,6 @@ function replyStatusTone(status: string): "blue" | "green" | "amber" | "red" | "
   return "slate";
 }
 
-function nodeTypeLabel(type: string) {
-  return {
-    Conclusion: "结论",
-    Uncertainty: "不确定点",
-    Question: "问题",
-    Issue: "争点",
-    Fact: "事实",
-    Evidence: "证据",
-    Rule: "规则",
-    Analysis: "分析",
-  }[type] ?? type;
-}
-
 function reasoningStatusLabel(status: string) {
   return {
     draft: "草稿",
@@ -820,6 +805,14 @@ function reasoningStatusLabel(status: string) {
     ready_for_review: "待复核",
     confirmed: "已确认",
   }[status] ?? status;
+}
+
+function generationModeLabel(mode: string) {
+  return {
+    llm: "大模型生成",
+    llm_repaired: "大模型修复",
+    rule_fallback: "规则兜底",
+  }[mode] ?? mode;
 }
 
 function questionStatusLabel(status: string) {
@@ -862,13 +855,6 @@ function messageLabel(message: { sender: string; status: string; source?: string
 
 function agentTitleLabel(value?: string | null) {
   return value ? value.replaceAll("Agent", "智能体") : "未分配";
-}
-
-function toneFor(type: string): "blue" | "green" | "amber" | "red" | "slate" {
-  if (type === "Conclusion") return "green";
-  if (type === "Uncertainty" || type === "Question") return "amber";
-  if (type === "Issue") return "blue";
-  return "slate";
 }
 
 function shortTime(value: string) {

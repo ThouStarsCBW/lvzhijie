@@ -858,11 +858,131 @@ button {
   border: 1px solid var(--border);
   background: white;
   padding: 11px;
+  text-align: left;
 }
 
 .reasoning-node h3 {
   margin: 5px 0 4px;
   font-size: 13.5px;
+}
+
+.flowchart-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.flowchart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.flowchart-legend-item {
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.flowchart-legend-item.is-verified,
+.reasoning-node.is-verified {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #14532d;
+}
+
+.flowchart-legend-item.is-probable,
+.reasoning-node.is-probable {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.flowchart-legend-item.is-unverified,
+.reasoning-node.is-unverified {
+  border-color: #fbbf24;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.flowchart-legend-item.is-missing,
+.reasoning-node.is-missing {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+}
+
+.flowchart-legend-item.is-conflict,
+.reasoning-node.is-conflict {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #7f1d1d;
+}
+
+.flowchart-stage {
+  overflow: auto;
+  min-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.flowchart-svg {
+  min-width: 720px;
+}
+
+.flowchart-svg svg {
+  display: block;
+  max-width: none;
+  width: 100%;
+  min-height: 300px;
+}
+
+.reasoning-node-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.reasoning-node-list .reasoning-node {
+  cursor: pointer;
+  appearance: none;
+}
+
+.reasoning-node-list .reasoning-node.is-selected {
+  outline: 2px solid #0f172a;
+  outline-offset: 2px;
+}
+
+.node-meta {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.flowchart-inspector {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fafc;
+  padding: 12px;
+}
+
+.flowchart-inspector h3 {
+  margin: 4px 0 0;
+  font-size: 15px;
+}
+
+.flowchart-inspector p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .architecture-panel {
@@ -1059,6 +1179,7 @@ button {
   .architecture-groups,
   .split,
   .reasoning-canvas,
+  .reasoning-node-list,
   .item-grid,
   .compare-row,
   .document-workbench {

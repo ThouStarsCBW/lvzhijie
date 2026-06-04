@@ -53,6 +53,9 @@ class JsonStore:
         if "legal_research_results" not in self.data:
             self.data["legal_research_results"] = []
             changed = True
+        if "agent_chat_messages" not in self.data:
+            self.data["agent_chat_messages"] = []
+            changed = True
 
         for task in self.data.get("case_tasks", []):
             if not isinstance(task, dict):
@@ -110,6 +113,72 @@ class JsonStore:
             if isinstance(agent, dict) and agent.get("role") not in existing_agent_roles:
                 self.data.setdefault("legal_agents", []).append(agent)
                 existing_agent_roles.add(agent.get("role"))
+                changed = True
+
+        demo_prefixes = (
+            "contact_family_",
+            "conv_family_",
+            "msg_family_",
+            "case_family_",
+            "task_family_",
+            "comment_family_",
+            "comment_task_family_",
+            "memory_family_",
+            "followup_family_",
+            "reply_family_",
+            "event_family_",
+            "doc_family_",
+            "rev_family_",
+            "branch_family_",
+            "diff_family_",
+            "analysis_family_",
+            "research_family_",
+            "result_family_",
+            "reason_family_",
+        )
+        for key, seed_rows in seed.items():
+            if not isinstance(seed_rows, list):
+                continue
+            rows = self.data.setdefault(key, [])
+            existing_indexes = {
+                row.get("id"): index
+                for index, row in enumerate(rows)
+                if isinstance(row, dict) and row.get("id")
+            }
+            for seed_row in seed_rows:
+                if not isinstance(seed_row, dict):
+                    continue
+                seed_id = seed_row.get("id")
+                if not isinstance(seed_id, str) or not seed_id.startswith(demo_prefixes):
+                    continue
+                existing_index = existing_indexes.get(seed_id)
+                if existing_index is None:
+                    rows.append(seed_row)
+                    existing_indexes[seed_id] = len(rows) - 1
+                    changed = True
+                elif rows[existing_index] != seed_row:
+                    rows[existing_index] = seed_row
+                    changed = True
+
+        traffic_full_demo_titles = {
+            "similar_case_search": "类案检索：交通事故逃逸与刑事因果关系",
+            "regulation_search": "法规检索：交通肇事罪、逃逸责任与事故认定",
+        }
+        traffic_full_demo_description = (
+            "2023年6月9日河北邢台任泽区交通事故：需围绕事故原因、逃逸后果、"
+            "行政事故责任与刑事主要责任的关系进行检索。"
+        )
+        for task in self.data.get("case_tasks", []):
+            if not isinstance(task, dict) or task.get("case_id") != "case_f78b3960fc11":
+                continue
+            task_type = task.get("task_type")
+            replacement_title = traffic_full_demo_titles.get(task_type)
+            if not replacement_title:
+                continue
+            old_title = str(task.get("title") or "")
+            if "律师在吗" in old_title or "对方死人" in old_title or old_title != replacement_title:
+                task["title"] = replacement_title
+                task["description"] = traffic_full_demo_description
                 changed = True
 
         # Migrate existing documents to branch structure

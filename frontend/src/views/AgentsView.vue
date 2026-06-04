@@ -14,9 +14,14 @@
           <h3>{{ agentDisplayTitle(group.title) }}</h3>
           <p class="muted small">{{ group.description }}</p>
           <div class="agent-chip-row">
-            <span v-for="role in group.agent_roles" :key="role" class="agent-chip">
+            <RouterLink
+              v-for="role in group.agent_roles"
+              :key="role"
+              class="agent-chip"
+              :to="agentByRole[role] ? `/agents/${agentByRole[role].id}` : '/agents'"
+            >
               {{ agentTitle(role) }}
-            </span>
+            </RouterLink>
           </div>
           <div v-if="group.departments.length" class="department-grid">
             <div v-for="department in group.departments" :key="department.id" class="department-item">
@@ -29,7 +34,7 @@
     </section>
 
     <div class="grid cols-3">
-      <article v-for="agent in agents" :key="agent.id" class="panel">
+      <RouterLink v-for="agent in agents" :key="agent.id" class="panel agent-card" :to="`/agents/${agent.id}`">
         <Badge :tone="agent.active ? groupTone(agent.group) : 'slate'">{{ roleLabel(agent.role) }}</Badge>
         <h2 class="panel-title" style="margin-top: 12px">{{ agentDisplayTitle(agent.title) }}</h2>
         <p class="panel-subtitle">{{ agent.description }}</p>
@@ -39,7 +44,11 @@
         <ul>
           <li v-for="item in agent.responsibilities" :key="item">{{ item }}</li>
         </ul>
-      </article>
+        <div class="agent-card-footer">
+          <span>本地资料检索</span>
+          <strong>打开聊天</strong>
+        </div>
+      </RouterLink>
     </div>
   </section>
 </template>
@@ -101,3 +110,46 @@ function groupTone(group: string): "blue" | "green" | "amber" | "red" | "slate" 
   return "slate";
 }
 </script>
+
+<style scoped>
+.agent-card {
+  display: flex;
+  flex-direction: column;
+  color: inherit;
+  text-decoration: none;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.agent-card:hover {
+  border-color: #bfdbfe;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.agent-card ul {
+  flex: 1;
+  padding-left: 18px;
+}
+
+.agent-card-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-card-footer strong {
+  color: var(--blue);
+}
+
+.agent-chip {
+  text-decoration: none;
+}
+</style>

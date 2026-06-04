@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
 
 import App from "./App.vue";
+import AgentChatView from "./views/AgentChatView.vue";
 import AgentsView from "./views/AgentsView.vue";
 import CaseDetailView from "./views/CaseDetailView.vue";
 import CaseNewView from "./views/CaseNewView.vue";
@@ -36,6 +37,7 @@ const router = createRouter({
     { path: "/research", component: LegalResearchView },
     { path: "/reasoning", component: ReasoningView },
     { path: "/agents", component: AgentsView },
+    { path: "/agents/:id", component: AgentChatView },
     { path: "/openclaw", component: OpenClawView },
     { path: "/settings", component: OpenClawView },
     { path: "/settings/mock-wechat", component: MockWechatView },

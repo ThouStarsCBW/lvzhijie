@@ -15,7 +15,9 @@ from app.store import JsonStore
 
 
 @pytest.fixture()
-def client(tmp_path) -> TestClient:
+def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.delenv("LVZHIJIE_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     main.store = JsonStore(tmp_path / "store.json")
     main.mock_wechat = MockWechatStore(tmp_path / "mock_wechat")
     # Replace the static mount for assets so it points to tmp_path

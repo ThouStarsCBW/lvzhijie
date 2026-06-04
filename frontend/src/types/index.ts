@@ -162,6 +162,35 @@ export type AgentArchitecture = {
   groups: AgentGroup[];
 };
 
+export type AgentRetrievedContext = {
+  id: string;
+  source_type: "case" | "memory" | "wechat" | "document" | "research" | "task";
+  title: string;
+  excerpt: string;
+  score: number;
+  case_id?: string | null;
+  document_id?: string | null;
+  conversation_id?: string | null;
+  ref_id?: string | null;
+};
+
+export type AgentChatMessage = {
+  id: string;
+  agent_id: string;
+  sender: "user" | "agent";
+  content: string;
+  source: "manual" | "llm" | "rule_fallback";
+  model?: string | null;
+  retrieved_contexts: AgentRetrievedContext[];
+  created_at: string;
+};
+
+export type AgentChatResponse = {
+  user_message: AgentChatMessage;
+  agent_message: AgentChatMessage;
+  retrieved_contexts: AgentRetrievedContext[];
+};
+
 export type LegalDocument = {
   id: string;
   case_id?: string | null;
@@ -258,6 +287,7 @@ export type ReasoningNode = {
   label: string;
   content: string;
   confidence: number;
+  status: "verified" | "probable" | "unverified" | "missing" | "conflict";
   source_refs: string[];
 };
 
@@ -266,6 +296,7 @@ export type ReasoningEdge = {
   source: string;
   target: string;
   relation_type: string;
+  label: string;
 };
 
 export type LegalReasoningRun = {
@@ -273,6 +304,10 @@ export type LegalReasoningRun = {
   case_id: string;
   status: string;
   input_summary: string;
+  graph_format: "structured" | "mermaid_flowchart";
+  mermaid_source: string;
+  generation_mode: "llm" | "rule_fallback" | "llm_repaired";
+  validation_warnings: string[];
   nodes: ReasoningNode[];
   edges: ReasoningEdge[];
   follow_up_questions: string[];

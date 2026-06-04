@@ -50,7 +50,6 @@ import {
   FileDiff,
   LayoutDashboard,
   MessageCircle,
-  Network,
   Scale,
   Search,
   Settings,
@@ -72,7 +71,6 @@ const core = [
 ];
 
 const system = [
-  { to: "/openclaw", label: "微信桥配置", icon: Network, match: ["/openclaw"] },
   { to: "/settings", label: "系统设置", icon: Settings, match: ["/settings"] },
 ];
 

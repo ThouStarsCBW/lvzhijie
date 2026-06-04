@@ -19,6 +19,10 @@ from app.models import (
 )
 
 
+def _demo_time(suffix: str, offset: int) -> str:
+    return f"2026-06-03T09:{(int(suffix) + offset) % 55:02d}:00+08:00"
+
+
 class MockWechatStore:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -74,7 +78,7 @@ class MockWechatStore:
                     "case_id": f"case_family_{suffix}",
                     "status": "open",
                     "auto_reply_source": "openclaw",
-                    "last_message_at": now_iso(),
+                    "last_message_at": _demo_time(suffix, 8),
                     "unread_count": 0,
                     "contact": {
                         "id": contact_id,
@@ -82,7 +86,7 @@ class MockWechatStore:
                         "display_name": display_name,
                         "remark": remark,
                         "avatar_url": None,
-                        "last_seen_at": now_iso(),
+                        "last_seen_at": _demo_time(suffix, 8),
                     },
                 }
             )
@@ -116,6 +120,16 @@ class MockWechatStore:
                     "outbound",
                     "先重点保留被围堵、倒地挨打、对方人数、刀具来源、伤情鉴定、老师处理记录和在场同学证言。",
                 ),
+                (
+                    "wechat_user",
+                    "inbound",
+                    "学校说监控要等派出所调取，我们手上有孩子脖子和胳膊的伤照，也有两个同学愿意作证。",
+                ),
+                (
+                    "owner",
+                    "outbound",
+                    "可以。录屏样例里我会把监控、伤照、同学证言和学校记录列成证据清单，再生成正当防卫追问。",
+                ),
             ],
             "269": [
                 (
@@ -142,6 +156,16 @@ class MockWechatStore:
                     "owner",
                     "outbound",
                     "这个样例重点在刑法因果关系。请先把事故原因部分、责任认定部分、现场证人材料和救治时间线整理出来。",
+                ),
+                (
+                    "wechat_user",
+                    "inbound",
+                    "现在有事故认定书照片、现场图和救护车到场时间。家属担心认定全责后就没法再解释了。",
+                ),
+                (
+                    "owner",
+                    "outbound",
+                    "仍然可以解释。我们会把行政全责、事故原因力和刑事主要责任分开分析，并准备补充追问。",
                 ),
             ],
             "272": [
@@ -170,6 +194,16 @@ class MockWechatStore:
                     "outbound",
                     "醉驾事实本身仍有刑事风险，但诱导者如果反复欺骗、怂恿并安排路线车辆，可能承担更重的共犯责任。",
                 ),
+                (
+                    "wechat_user",
+                    "inbound",
+                    "我们有饭局前后的聊天记录，对方提过代驾，也有人说已经报警等着查他。",
+                ),
+                (
+                    "owner",
+                    "outbound",
+                    "这些记录很关键。演示里会把做局链条、共犯责任和被诱导者量刑情节分成三个推理节点。",
+                ),
             ],
         }
         result: dict[str, list[dict[str, Any]]] = {}
@@ -194,7 +228,7 @@ class MockWechatStore:
                         "status": status,
                         "source": "mock",
                         "openclaw_message_id": None,
-                        "created_at": now_iso(),
+                        "created_at": _demo_time(suffix, index),
                         "raw_payload": None,
                     }
                 )
@@ -202,20 +236,48 @@ class MockWechatStore:
 
     def _ensure_family_samples(self) -> None:
         conversations = self.list_conversations()
-        conversation_ids = {conversation.get("id") for conversation in conversations}
+        conversations_by_id = {
+            conversation.get("id"): conversation
+            for conversation in conversations
+            if isinstance(conversation, dict) and conversation.get("id")
+        }
         changed = False
         for conversation in self._family_sample_conversations():
-            if conversation["id"] not in conversation_ids:
+            existing = conversations_by_id.get(conversation["id"])
+            if existing is None:
                 conversations.append(conversation)
-                conversation_ids.add(conversation["id"])
+                conversations_by_id[conversation["id"]] = conversation
+                changed = True
+            elif existing != conversation:
+                existing.update(conversation)
                 changed = True
         if changed:
             self._write_json(self.root / "conversations.json", conversations)
 
         for conversation_id, messages in self._family_sample_messages().items():
             messages_path = self.root / "messages" / f"{conversation_id}.json"
-            if not messages_path.exists():
-                self._write_json(messages_path, messages)
+            existing_messages = self.list_messages(conversation_id)
+            existing_by_id = {
+                message.get("id"): message
+                for message in existing_messages
+                if isinstance(message, dict) and message.get("id")
+            }
+            sample_ids = {message["id"] for message in messages}
+            next_messages = []
+            messages_changed = not messages_path.exists()
+            for message in messages:
+                existing = existing_by_id.get(message["id"])
+                next_messages.append(message)
+                if existing != message:
+                    messages_changed = True
+            extras = [
+                message
+                for message in existing_messages
+                if isinstance(message, dict) and message.get("id") not in sample_ids
+            ]
+            next_messages.extend(extras)
+            if messages_changed or len(next_messages) != len(existing_messages):
+                self._write_json(messages_path, next_messages)
 
     def _read_json(self, path: Path) -> Any:
         if not path.exists():
@@ -417,6 +479,18 @@ class MockWechatStore:
         for conv in mock_conversations:
             contact_data = conv.get("contact")
             if contact_data and contact_data.get("id"):
+                existing_contact = existing_contacts.get(contact_data["id"])
+                if (
+                    contact_data["id"] == "contact_demo"
+                    and existing_contact
+                    and existing_contact.get("display_name") == "张先生"
+                    and contact_data.get("display_name") == "演示客户"
+                ):
+                    contact_data = {
+                        **contact_data,
+                        "display_name": existing_contact.get("display_name"),
+                        "remark": existing_contact.get("remark") or contact_data.get("remark"),
+                    }
                 existing_contacts[contact_data["id"]] = contact_data
 
             conversation_data = {

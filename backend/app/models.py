@@ -215,6 +215,29 @@ class AgentArchitecture(BaseModel):
     groups: list[AgentGroup]
 
 
+class AgentRetrievedContext(BaseModel):
+    id: str
+    source_type: Literal["case", "memory", "wechat", "document", "research", "task"]
+    title: str
+    excerpt: str
+    score: float = 0
+    case_id: str | None = None
+    document_id: str | None = None
+    conversation_id: str | None = None
+    ref_id: str | None = None
+
+
+class AgentChatMessage(BaseModel):
+    id: str = Field(default_factory=lambda: new_id("agent_msg"))
+    agent_id: str
+    sender: Literal["user", "agent"]
+    content: str
+    source: Literal["manual", "llm", "rule_fallback"] = "manual"
+    model: str | None = None
+    retrieved_contexts: list[AgentRetrievedContext] = Field(default_factory=list)
+    created_at: str = Field(default_factory=now_iso)
+
+
 class LegalDocument(BaseModel):
     id: str = Field(default_factory=lambda: new_id("doc"))
     case_id: str | None = None
@@ -339,6 +362,7 @@ class ReasoningNode(BaseModel):
     label: str
     content: str
     confidence: float = 0.8
+    status: Literal["verified", "probable", "unverified", "missing", "conflict"] = "probable"
     source_refs: list[str] = Field(default_factory=list)
 
 
@@ -355,6 +379,7 @@ class ReasoningEdge(BaseModel):
         "uncertain_about",
         "asks",
     ]
+    label: str = ""
 
 
 class LegalReasoningRun(BaseModel):
@@ -362,6 +387,10 @@ class LegalReasoningRun(BaseModel):
     case_id: str
     status: Literal["draft", "needs_evidence", "ready_for_review", "confirmed"] = "ready_for_review"
     input_summary: str
+    graph_format: Literal["structured", "mermaid_flowchart"] = "structured"
+    mermaid_source: str = ""
+    generation_mode: Literal["llm", "rule_fallback", "llm_repaired"] = "rule_fallback"
+    validation_warnings: list[str] = Field(default_factory=list)
     nodes: list[ReasoningNode]
     edges: list[ReasoningEdge]
     follow_up_questions: list[str]
@@ -418,6 +447,16 @@ class LegalReplyJob(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str
+
+
+class AgentChatRequest(BaseModel):
+    content: str
+
+
+class AgentChatResponse(BaseModel):
+    user_message: AgentChatMessage
+    agent_message: AgentChatMessage
+    retrieved_contexts: list[AgentRetrievedContext] = Field(default_factory=list)
 
 
 class SendFollowUpRequest(BaseModel):

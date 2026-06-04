@@ -22,8 +22,12 @@ from app.legal_search_adapter import DelilegalSearchClient, LegalSearchApiError
 from app.models import (
     ActivityEvent,
     AgentArchitecture,
+    AgentChatMessage,
+    AgentChatRequest,
+    AgentChatResponse,
     AgentDepartment,
     AgentGroup,
+    AgentRetrievedContext,
     BindConversationCaseRequest,
     BranchCreateRequest,
     BranchRevisionCreateRequest,
@@ -509,6 +513,52 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def llm_settings() -> tuple[str | None, str, str]:
+    api_key = os.getenv("LVZHIJIE_LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    base_url = (os.getenv("LVZHIJIE_LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+    model = os.getenv("LVZHIJIE_LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+    return api_key, base_url, model
+
+
+def call_llm_chat_completion(
+    messages: list[dict[str, str]],
+    *,
+    temperature: float = 0.2,
+    timeout: int = 35,
+) -> tuple[str | None, str]:
+    api_key, base_url, model = llm_settings()
+    if not api_key:
+        return None, model
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    request = Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+        parsed = json.loads(body)
+        choices = parsed.get("choices") if isinstance(parsed, dict) else None
+        if not isinstance(choices, list) or not choices:
+            return None, model
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if not isinstance(message, dict):
+            return None, model
+        content = str(message.get("content") or "").strip()
+        return content or None, model
+    except (OSError, URLError, TimeoutError, json.JSONDecodeError, KeyError, TypeError):
+        return None, model
 
 
 def normalize_case_analysis(raw: dict[str, Any], fallback: dict[str, object]) -> dict[str, object]:
@@ -1391,6 +1441,250 @@ def build_agent_architecture() -> AgentArchitecture:
     )
 
 
+def get_agent_or_404(agent_id: str) -> LegalAgent:
+    agent = store.get("legal_agents", agent_id, LegalAgent)
+    if agent:
+        return agent
+    agent = next((item for item in store.list("legal_agents", LegalAgent) if item.role == agent_id), None)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+
+def normalize_agent_chat_terms(value: str) -> list[str]:
+    tokens = re.findall(r"[a-z0-9_]{2,}|[\u4e00-\u9fff]+", value.lower())
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def add(term: str) -> None:
+        cleaned = term.strip().lower()
+        if len(cleaned) < 2 or cleaned in seen:
+            return
+        seen.add(cleaned)
+        terms.append(cleaned)
+
+    for token in tokens:
+        add(token)
+        if re.fullmatch(r"[\u4e00-\u9fff]+", token):
+            for size in (2, 3):
+                for index in range(0, max(0, len(token) - size + 1)):
+                    add(token[index : index + size])
+    return terms[:48]
+
+
+def score_agent_context(text: str, terms: list[str]) -> float:
+    if not terms:
+        return 0
+    lower = text.lower()
+    score = 0.0
+    for term in terms:
+        count = lower.count(term)
+        if count:
+            score += min(count, 4) * (1.4 if len(term) >= 3 else 1.0)
+    return round(score, 3)
+
+
+def agent_excerpt(text: str, terms: list[str], limit: int = 420) -> str:
+    cleaned = " ".join(text.split())
+    if len(cleaned) <= limit:
+        return cleaned
+    lower = cleaned.lower()
+    indexes = [lower.find(term) for term in terms if lower.find(term) >= 0]
+    if not indexes:
+        return f"{cleaned[:limit].rstrip()}..."
+    center = min(indexes)
+    start = max(0, center - limit // 3)
+    end = min(len(cleaned), start + limit)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(cleaned) else ""
+    return f"{prefix}{cleaned[start:end].rstrip()}{suffix}"
+
+
+def local_agent_contexts(query: str, limit: int = 8) -> list[AgentRetrievedContext]:
+    terms = normalize_agent_chat_terms(query)
+    candidates: list[AgentRetrievedContext] = []
+    cases = {case.id: case for case in store.list("cases", Case)}
+    contacts = {contact.id: contact for contact in store.list("wechat_contacts", WechatContact)}
+    conversations = {conv.id: conv for conv in store.list("wechat_conversations", WechatConversation)}
+
+    def add_context(
+        *,
+        source_type: AgentRetrievedContext.model_fields["source_type"].annotation,
+        ref_id: str,
+        title: str,
+        text: str,
+        case_id: str | None = None,
+        document_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> None:
+        score = score_agent_context(f"{title}\n{text}", terms)
+        if score <= 0:
+            return
+        candidates.append(
+            AgentRetrievedContext(
+                id=f"{source_type}:{ref_id}",
+                source_type=source_type,
+                title=title[:120],
+                excerpt=agent_excerpt(text, terms),
+                score=score,
+                case_id=case_id,
+                document_id=document_id,
+                conversation_id=conversation_id,
+                ref_id=ref_id,
+            )
+        )
+
+    for case in cases.values():
+        add_context(
+            source_type="case",
+            ref_id=case.id,
+            title=f"案件：{case.title}",
+            text=f"{case.summary}\n状态：{case.status}\n类型：{case_type_label(case.case_type)}",
+            case_id=case.id,
+        )
+
+    for memory in store.list("case_memories", CaseMemory):
+        case = cases.get(memory.case_id)
+        add_context(
+            source_type="memory",
+            ref_id=memory.id,
+            title=f"案件记忆：{case.title if case else memory.case_id}",
+            text=f"{memory.kind}：{memory.content}",
+            case_id=memory.case_id,
+        )
+
+    for message in store.list("wechat_messages", WechatMessage):
+        text = message_plaintext(message)
+        if not text:
+            continue
+        conversation = conversations.get(message.conversation_id)
+        contact = contacts.get(conversation.contact_id) if conversation else None
+        case_id = conversation.case_id if conversation else None
+        add_context(
+            source_type="wechat",
+            ref_id=message.id,
+            title=f"客户聊天：{contact.display_name if contact else message.conversation_id}",
+            text=f"{message.created_at} {message.sender}：{text}",
+            case_id=case_id,
+            conversation_id=message.conversation_id,
+        )
+
+    for document in store.list("legal_documents", LegalDocument):
+        revision = latest_document_revision(document.id)
+        text = revision.content_text if revision else ""
+        add_context(
+            source_type="document",
+            ref_id=document.id,
+            title=f"文件：{document.title}",
+            text=f"{document.document_type}\n{text}",
+            case_id=document.case_id,
+            document_id=document.id,
+        )
+
+    for result in store.list("legal_research_results", LegalResearchResult):
+        add_context(
+            source_type="research",
+            ref_id=result.id,
+            title=f"检索结果：{result.title}",
+            text="\n".join(
+                [
+                    result.source,
+                    result.reference,
+                    result.court_or_authority,
+                    *result.key_points,
+                ]
+            ),
+            case_id=result.case_id,
+        )
+
+    for task in store.list("case_tasks", CaseTask):
+        case = cases.get(task.case_id)
+        add_context(
+            source_type="task",
+            ref_id=task.id,
+            title=f"任务：{task.title}",
+            text="\n".join([task.description, task.result_summary, task.status, task.assigned_agent_role or ""]),
+            case_id=task.case_id,
+        )
+
+    candidates.sort(key=lambda item: item.score, reverse=True)
+    deduped: list[AgentRetrievedContext] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = f"{candidate.source_type}:{candidate.ref_id}"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def agent_context_block(contexts: list[AgentRetrievedContext]) -> str:
+    if not contexts:
+        return "未命中本地资料。"
+    lines = []
+    for index, context in enumerate(contexts, start=1):
+        lines.append(
+            f"[{index}] {context.title}\n"
+            f"类型：{context.source_type}；引用：{context.ref_id or context.id}\n"
+            f"片段：{context.excerpt}"
+        )
+    return "\n\n".join(lines)
+
+
+def build_agent_fallback_answer(agent: LegalAgent, query: str, contexts: list[AgentRetrievedContext]) -> str:
+    title = agent.title.replace(" Agent", "智能体")
+    if not contexts:
+        return (
+            f"{title}已收到你的问题。当前没有从本地案件、文件或聊天记录中检索到直接相关资料。"
+            "请补充案件名称、客户名称、关键词或上传/录入材料后，我可以继续协助整理事实、风险点和下一步任务。"
+        )
+    top_lines = "\n".join(
+        f"{index}. {context.title}：{context.excerpt}"
+        for index, context in enumerate(contexts[:4], start=1)
+    )
+    return (
+        f"{title}已基于本地资料先做一版归纳：\n"
+        f"{top_lines}\n\n"
+        "初步建议：先核对上述资料是否完整，再按事实、证据、争议焦点和待补充问题拆分处理。"
+        "如需要正式法律意见，应结合完整材料和人工律师复核。"
+    )
+
+
+def build_agent_llm_answer(
+    *,
+    agent: LegalAgent,
+    query: str,
+    history: list[AgentChatMessage],
+    contexts: list[AgentRetrievedContext],
+) -> tuple[str, str, str]:
+    system_prompt = (
+        f"你是律所内部智能体：{agent.title}。\n"
+        f"职责描述：{agent.description}\n"
+        f"责任清单：{'；'.join(agent.responsibilities)}\n"
+        "你需要用中文回答，优先依据本地检索资料。资料不足时要明确指出缺口，"
+        "不要编造不存在的案件、法规、证据或聊天记录。回答应面向律师工作台，"
+        "结构清晰、可执行，但不要输出模型内部推理过程。"
+    )
+    recent_history = history[-10:]
+    llm_messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    for message in recent_history:
+        role = "assistant" if message.sender == "agent" else "user"
+        llm_messages.append({"role": role, "content": message.content[:2000]})
+    user_prompt = (
+        f"本地检索资料：\n{agent_context_block(contexts)}\n\n"
+        f"用户问题：\n{query}\n\n"
+        "请结合检索资料作答，并在结尾用“本地资料依据”列出用到的资料编号。"
+    )
+    llm_messages.append({"role": "user", "content": user_prompt})
+    content, model = call_llm_chat_completion(llm_messages, temperature=0.25, timeout=45)
+    if content:
+        return content, "llm", model
+    return build_agent_fallback_answer(agent, query, contexts), "rule_fallback", model
+
+
 @app.get("/api/health")
 async def health() -> dict[str, object]:
     return {"ok": True, "service": "lvzhijie-backend"}
@@ -1808,6 +2102,8 @@ async def delete_case(case_id: str) -> dict[str, object]:
         if conversation.case_id == case_id:
             conversation.case_id = None
             store.update("wechat_conversations", conversation)
+            if using_mock_wechat():
+                mock_wechat.update_conversation(conversation.id, {"case_id": None})
 
     store.delete("cases", case_id)
     record("case.deleted", "删除案件", case.title)
@@ -2235,6 +2531,56 @@ async def list_agents() -> list[LegalAgent]:
 @app.get("/api/agents/architecture")
 async def get_agent_architecture() -> AgentArchitecture:
     return build_agent_architecture()
+
+
+@app.get("/api/agents/{agent_id}/chat")
+async def list_agent_chat_messages(agent_id: str) -> list[AgentChatMessage]:
+    agent = get_agent_or_404(agent_id)
+    messages = store.filter("agent_chat_messages", AgentChatMessage, agent_id=agent.id)
+    return sorted(messages, key=lambda item: item.created_at)
+
+
+@app.post("/api/agents/{agent_id}/chat")
+async def send_agent_chat_message(agent_id: str, payload: AgentChatRequest) -> AgentChatResponse:
+    agent = get_agent_or_404(agent_id)
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="Message content cannot be empty")
+
+    history = sorted(
+        store.filter("agent_chat_messages", AgentChatMessage, agent_id=agent.id),
+        key=lambda item: item.created_at,
+    )
+    contexts = local_agent_contexts(content)
+    user_message = AgentChatMessage(agent_id=agent.id, sender="user", content=content)
+    answer, source, model = build_agent_llm_answer(
+        agent=agent,
+        query=content,
+        history=history,
+        contexts=contexts,
+    )
+    agent_message = AgentChatMessage(
+        agent_id=agent.id,
+        sender="agent",
+        content=answer,
+        source=source,
+        model=model,
+        retrieved_contexts=contexts,
+    )
+    store.add("agent_chat_messages", user_message)
+    store.add("agent_chat_messages", agent_message)
+    record(
+        "agent.chat",
+        "智能体对话",
+        f"{agent.title} 回复：{content[:80]}",
+        entity_type="agent",
+        entity_id=agent.id,
+    )
+    return AgentChatResponse(
+        user_message=user_message,
+        agent_message=agent_message,
+        retrieved_contexts=contexts,
+    )
 
 
 @app.get("/api/documents")
@@ -2839,16 +3185,271 @@ async def get_document_diff(
     return diff
 
 
-@app.post("/api/reasoning/cases/{case_id}/generate")
-async def generate_reasoning(case_id: str) -> LegalReasoningRun:
-    case = store.get("cases", case_id, Case)
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
-    memories = case_memories(case_id)
-    messages = case_messages(case)
-    documents = case_documents(case_id)
-    summary = infer_case_summary(case, memories, messages)
+REASONING_NODE_TYPES = {
+    "Fact",
+    "Evidence",
+    "Timeline",
+    "Issue",
+    "Rule",
+    "Analysis",
+    "Conclusion",
+    "Uncertainty",
+    "Question",
+}
 
+REASONING_NODE_STATUSES = {"verified", "probable", "unverified", "missing", "conflict"}
+
+REASONING_RELATION_TYPES = {
+    "supports",
+    "contradicts",
+    "requires",
+    "leads_to",
+    "depends_on",
+    "uncertain_about",
+    "asks",
+}
+
+REASONING_STATUS_LABELS = {
+    "verified": "已证实",
+    "probable": "合理推断",
+    "unverified": "无法证实",
+    "missing": "待补全",
+    "conflict": "证据冲突",
+}
+
+REASONING_TYPE_LABELS = {
+    "Fact": "事实",
+    "Evidence": "证据",
+    "Timeline": "时间线",
+    "Issue": "争点",
+    "Rule": "规则",
+    "Analysis": "分析",
+    "Conclusion": "结论",
+    "Uncertainty": "不确定点",
+    "Question": "追问",
+}
+
+REASONING_RELATION_LABELS = {
+    "supports": "支持",
+    "contradicts": "矛盾",
+    "requires": "需要",
+    "leads_to": "导向",
+    "depends_on": "依赖",
+    "uncertain_about": "不确定",
+    "asks": "追问",
+}
+
+
+def compact_text(value: object, limit: int = 420) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def string_items(value: object, limit: int = 8) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items = []
+    for item in value:
+        text = compact_text(item, 360)
+        if text:
+            items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def safe_mermaid_id(value: object, index: int, used: set[str]) -> str:
+    raw = re.sub(r"[^0-9A-Za-z_]", "_", str(value or "")).strip("_")
+    if not raw or not re.match(r"^[A-Za-z]", raw):
+        raw = f"N{index}_{raw}" if raw else f"N{index}"
+    raw = raw[:40]
+    candidate = raw
+    suffix = 2
+    while candidate in used:
+        candidate = f"{raw}_{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def mermaid_label(value: object) -> str:
+    text = compact_text(value, 96)
+    return (
+        text.replace("\\", "\\\\")
+        .replace('"', "'")
+        .replace("[", "【")
+        .replace("]", "】")
+        .replace("|", "｜")
+    )
+
+
+def normalize_reasoning_node_type(value: object) -> str:
+    text = str(value or "").strip()
+    aliases = {
+        "事实": "Fact",
+        "证据": "Evidence",
+        "时间线": "Timeline",
+        "争点": "Issue",
+        "规则": "Rule",
+        "法律规则": "Rule",
+        "分析": "Analysis",
+        "结论": "Conclusion",
+        "不确定": "Uncertainty",
+        "不确定点": "Uncertainty",
+        "追问": "Question",
+        "问题": "Question",
+    }
+    if text in REASONING_NODE_TYPES:
+        return text
+    return aliases.get(text, "Analysis")
+
+
+def normalize_reasoning_status(value: object, node_type: str, source_refs: list[str]) -> str:
+    text = str(value or "").strip().lower()
+    aliases = {
+        "已证实": "verified",
+        "证实": "verified",
+        "confirmed": "verified",
+        "合理推断": "probable",
+        "推断": "probable",
+        "无法证实": "unverified",
+        "未证实": "unverified",
+        "待核实": "unverified",
+        "待补全": "missing",
+        "缺失": "missing",
+        "missing_info": "missing",
+        "冲突": "conflict",
+        "证据冲突": "conflict",
+    }
+    status = text if text in REASONING_NODE_STATUSES else aliases.get(text)
+    if not status:
+        if node_type in {"Uncertainty", "Question"}:
+            return "missing"
+        if node_type == "Evidence" and source_refs:
+            return "verified"
+        return "probable"
+    if status == "verified" and not source_refs and node_type != "Rule":
+        return "probable"
+    return status
+
+
+def normalize_reasoning_relation(value: object) -> str:
+    text = str(value or "").strip()
+    aliases = {
+        "支持": "supports",
+        "矛盾": "contradicts",
+        "冲突": "contradicts",
+        "需要": "requires",
+        "导向": "leads_to",
+        "导致": "leads_to",
+        "依赖": "depends_on",
+        "不确定": "uncertain_about",
+        "追问": "asks",
+        "提问": "asks",
+    }
+    if text in REASONING_RELATION_TYPES:
+        return text
+    return aliases.get(text, "supports")
+
+
+def normalize_confidence(value: object, fallback: float = 0.68) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if confidence > 1:
+        confidence = confidence / 100
+    return max(0, min(1, confidence))
+
+
+def build_mermaid_source(nodes: list[ReasoningNode], edges: list[ReasoningEdge], direction: str = "TD") -> str:
+    direction = direction if direction in {"TD", "LR"} else "TD"
+    node_ids = {node.id for node in nodes}
+    lines = [f"flowchart {direction}"]
+    for node in nodes:
+        type_label = REASONING_TYPE_LABELS.get(node.node_type, node.node_type)
+        status_label = REASONING_STATUS_LABELS.get(node.status, node.status)
+        label = mermaid_label(f"{type_label}：{node.label}<br/>{status_label}")
+        lines.append(f'  {node.id}["{label}"]')
+    for edge in edges:
+        if edge.source not in node_ids or edge.target not in node_ids:
+            continue
+        label = mermaid_label(edge.label or REASONING_RELATION_LABELS.get(edge.relation_type, edge.relation_type))
+        lines.append(f"  {edge.source} -->|{label}| {edge.target}")
+    lines.extend(
+        [
+            "  classDef verified fill:#dcfce7,stroke:#16a34a,color:#14532d",
+            "  classDef probable fill:#dbeafe,stroke:#2563eb,color:#1e3a8a",
+            "  classDef unverified fill:#fef3c7,stroke:#d97706,color:#78350f",
+            "  classDef missing fill:#f1f5f9,stroke:#64748b,stroke-dasharray:5 4,color:#334155",
+            "  classDef conflict fill:#fee2e2,stroke:#dc2626,color:#7f1d1d",
+        ]
+    )
+    for node in nodes:
+        lines.append(f"  class {node.id} {node.status}")
+    return "\n".join(lines)
+
+
+def build_reasoning_context(
+    case: Case,
+    memories: list[CaseMemory],
+    messages: list[WechatMessage],
+    documents: list[LegalDocument],
+    results: list[LegalResearchResult],
+) -> str:
+    memory_lines = [
+        f"- [{memory.id}] {memory.kind} / confidence={memory.confidence:.2f} / confirmed={memory.confirmed}：{compact_text(memory.content, 360)}"
+        for memory in memories[:18]
+    ]
+    message_lines = [
+        f"- [{message.id}] {message.created_at} {message.sender} {message.direction}：{compact_text(message_plaintext(message), 360)}"
+        for message in messages[-18:]
+        if message_plaintext(message)
+    ]
+    document_lines = []
+    for document in documents[:8]:
+        revision = latest_document_revision(document.id)
+        revision_hint = ""
+        if revision:
+            revision_hint = f"；摘要：{compact_text(revision.change_summary or revision.content_text, 360)}"
+        document_lines.append(f"- [{document.id}] {document.title}（{document.document_type}）{revision_hint}")
+    research_lines = [
+        f"- [{result.id}] {result.result_type}：{compact_text(result.title, 160)}；{compact_text('；'.join(result.key_points) or result.reference, 360)}"
+        for result in results[:10]
+    ]
+    return "\n".join(
+        [
+            f"案件：[{case.id}] {case.title}",
+            f"类型：{case_type_label(case.case_type)}",
+            f"状态：{case.status}",
+            f"摘要：{compact_text(case.summary, 800) or '暂无摘要'}",
+            "",
+            "案件记忆：",
+            "\n".join(memory_lines) or "- 暂无",
+            "",
+            "微信聊天：",
+            "\n".join(message_lines) or "- 暂无",
+            "",
+            "案件文件：",
+            "\n".join(document_lines) or "- 暂无",
+            "",
+            "法律检索结果：",
+            "\n".join(research_lines) or "- 暂无",
+        ]
+    )
+
+
+def build_rule_reasoning_run(
+    case: Case,
+    memories: list[CaseMemory],
+    messages: list[WechatMessage],
+    documents: list[LegalDocument],
+    *,
+    warnings: list[str] | None = None,
+) -> LegalReasoningRun:
+    summary = infer_case_summary(case, memories, messages)
     factual_memories = [memory for memory in memories if memory.kind in {"fact", "timeline", "evidence"}]
     uncertainty_memories = [memory for memory in memories if memory.kind == "uncertainty"]
     inbound_messages = [message for message in messages if message.direction == "inbound"]
@@ -2859,12 +3460,14 @@ async def generate_reasoning(case_id: str) -> LegalReasoningRun:
     if factual_memories:
         for index, memory in enumerate(factual_memories[:4], start=1):
             node_type = "Timeline" if memory.kind == "timeline" else "Evidence" if memory.kind == "evidence" else "Fact"
+            status = "verified" if memory.confirmed or memory.source_ref else "probable"
             node = ReasoningNode(
                 node_type=node_type,
                 label=f"{'时间线' if node_type == 'Timeline' else '证据' if node_type == 'Evidence' else '事实'} {index}",
                 content=memory.content,
                 confidence=memory.confidence,
-                source_refs=[memory.source_ref] if memory.source_ref else [],
+                status=status,
+                source_refs=[memory.source_ref] if memory.source_ref else [memory.id],
             )
             nodes.append(node)
             source_nodes.append(node)
@@ -2874,12 +3477,13 @@ async def generate_reasoning(case_id: str) -> LegalReasoningRun:
             label="咨询事实",
             content=first_sentence(inbound_messages[0].content, summary),
             confidence=0.58,
+            status="probable",
             source_refs=[inbound_messages[0].id],
         )
         nodes.append(node)
         source_nodes.append(node)
     else:
-        node = ReasoningNode(node_type="Fact", label="案件摘要", content=summary, confidence=0.5)
+        node = ReasoningNode(node_type="Fact", label="案件摘要", content=summary, confidence=0.5, status="unverified")
         nodes.append(node)
         source_nodes.append(node)
 
@@ -2889,6 +3493,7 @@ async def generate_reasoning(case_id: str) -> LegalReasoningRun:
             label="案件文件",
             content="；".join(f"{document.title}（{document.document_type}）" for document in documents[:4]),
             confidence=0.7,
+            status="verified",
             source_refs=[document.id for document in documents[:4]],
         )
         nodes.append(document_node)
@@ -2899,24 +3504,28 @@ async def generate_reasoning(case_id: str) -> LegalReasoningRun:
         label=f"{case_type_label(case.case_type)}争议焦点",
         content=f"需要判断本案在{case_type_label(case.case_type)}框架下的请求基础、关键事实和证明责任。",
         confidence=0.68,
+        status="probable",
     )
     rule = ReasoningNode(
         node_type="Rule",
         label="法律要件",
         content=case_rule_hint(case.case_type),
         confidence=0.64,
+        status="probable",
     )
     analysis = ReasoningNode(
         node_type="Analysis",
         label="阶段分析",
         content=f"当前摘要：{summary} 现阶段应先核对事实与证据，再形成可对外使用的法律意见。",
         confidence=0.66,
+        status="probable",
     )
     conclusion = ReasoningNode(
         node_type="Conclusion",
         label="阶段结论",
         content="可以形成内部阶段性判断；如关键证据未补齐，应先追问并人工复核后再输出正式结论。",
         confidence=0.6,
+        status="probable",
     )
     nodes.extend([issue, rule, analysis, conclusion])
 
@@ -2943,6 +3552,7 @@ async def generate_reasoning(case_id: str) -> LegalReasoningRun:
         label="推理暂停点",
         content="；".join(missing_points[:3]),
         confidence=0.88,
+        status="missing" if missing_points[0] != "需由人工复核事实来源与对外表述边界。" else "unverified",
     )
     nodes.append(uncertainty_node)
     edges.append(ReasoningEdge(source=analysis.id, target=uncertainty_node.id, relation_type="uncertain_about"))
@@ -2964,15 +3574,20 @@ async def generate_reasoning(case_id: str) -> LegalReasoningRun:
         label="下一轮追问",
         content="；".join(follow_up_questions[:4]),
         confidence=0.92,
+        status="missing",
     )
     nodes.append(question_node)
     edges.append(ReasoningEdge(source=uncertainty_node.id, target=question_node.id, relation_type="asks"))
 
     needs_evidence = bool(missing_points and missing_points[0] != "需由人工复核事实来源与对外表述边界。")
-    run = LegalReasoningRun(
-        case_id=case_id,
+    return LegalReasoningRun(
+        case_id=case.id,
         status="needs_evidence" if needs_evidence else "ready_for_review",
         input_summary=summary,
+        graph_format="mermaid_flowchart",
+        mermaid_source=build_mermaid_source(nodes, edges),
+        generation_mode="rule_fallback",
+        validation_warnings=warnings or [],
         nodes=nodes,
         edges=edges,
         follow_up_questions=follow_up_questions,
@@ -2980,8 +3595,209 @@ async def generate_reasoning(case_id: str) -> LegalReasoningRun:
         review_focus=["事实来源", "证据完整性", "法律依据", "对外表述边界"],
         output_summary=f"已生成{len(nodes)}个节点、{len(edges)}条关系，建议先处理追问后再输出正式意见。",
     )
+
+
+def normalize_llm_reasoning_run(
+    *,
+    case: Case,
+    summary: str,
+    raw: dict[str, Any],
+    fallback_run: LegalReasoningRun,
+) -> LegalReasoningRun | None:
+    raw_nodes = raw.get("nodes")
+    if not isinstance(raw_nodes, list) or not raw_nodes:
+        return None
+
+    warnings: list[str] = []
+    used_ids: set[str] = set()
+    id_map: dict[str, str] = {}
+    nodes: list[ReasoningNode] = []
+
+    for index, item in enumerate(raw_nodes[:28], start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_id = str(item.get("id") or f"N{index}")
+        node_id = safe_mermaid_id(raw_id, index, used_ids)
+        id_map[raw_id] = node_id
+        node_type = normalize_reasoning_node_type(item.get("type") or item.get("node_type"))
+        source_refs = string_items(item.get("source_refs"), 10)
+        status = normalize_reasoning_status(item.get("status"), node_type, source_refs)
+        label = compact_text(item.get("label") or REASONING_TYPE_LABELS.get(node_type, node_type), 64)
+        content = compact_text(item.get("summary") or item.get("content") or label, 520)
+        nodes.append(
+            ReasoningNode(
+                id=node_id,
+                node_type=node_type,  # type: ignore[arg-type]
+                label=label or f"节点 {index}",
+                content=content or label or "待补全信息",
+                confidence=normalize_confidence(item.get("confidence")),
+                status=status,  # type: ignore[arg-type]
+                source_refs=source_refs,
+            )
+        )
+
+    if len(nodes) < 3:
+        return None
+
+    node_ids = {node.id for node in nodes}
+    raw_edges = raw.get("edges")
+    edges: list[ReasoningEdge] = []
+    used_edge_ids: set[str] = set()
+    if isinstance(raw_edges, list):
+        for index, item in enumerate(raw_edges[:48], start=1):
+            if not isinstance(item, dict):
+                continue
+            raw_source = str(item.get("source") or "")
+            raw_target = str(item.get("target") or "")
+            source = id_map.get(raw_source, raw_source)
+            target = id_map.get(raw_target, raw_target)
+            if source not in node_ids or target not in node_ids or source == target:
+                warnings.append(f"已跳过无效边：{raw_source}->{raw_target}")
+                continue
+            relation = normalize_reasoning_relation(item.get("relation_type") or item.get("relation"))
+            edges.append(
+                ReasoningEdge(
+                    id=safe_mermaid_id(item.get("id") or f"E{index}", index, used_edge_ids),
+                    source=source,
+                    target=target,
+                    relation_type=relation,  # type: ignore[arg-type]
+                    label=compact_text(item.get("label") or REASONING_RELATION_LABELS.get(relation, relation), 28),
+                )
+            )
+
+    if not edges:
+        warnings.append("LLM 未返回有效边，已按节点顺序生成最小拓扑关系。")
+        for source, target in zip(nodes, nodes[1:]):
+            relation = "asks" if target.node_type == "Question" else "leads_to"
+            edges.append(ReasoningEdge(source=source.id, target=target.id, relation_type=relation))
+
+    unverified_points = string_items(raw.get("unverified_points"), 8)
+    existing_unverified = " ".join(node.content for node in nodes if node.status in {"unverified", "missing", "conflict"})
+    anchor = next((node for node in nodes if node.node_type == "Analysis"), nodes[-1])
+    for index, point in enumerate(unverified_points, start=1):
+        if point and point not in existing_unverified:
+            node = ReasoningNode(
+                id=safe_mermaid_id(f"U{index}", len(nodes) + index, used_ids),
+                node_type="Uncertainty",
+                label=f"无法证实 {index}",
+                content=point,
+                confidence=0.35,
+                status="unverified",
+            )
+            nodes.append(node)
+            edges.append(ReasoningEdge(source=anchor.id, target=node.id, relation_type="uncertain_about"))
+
+    follow_up_questions = string_items(raw.get("follow_up_questions"), 8) or fallback_run.follow_up_questions
+    review_focus = string_items(raw.get("review_focus"), 8) or fallback_run.review_focus
+    blocked_reason = compact_text(raw.get("blocked_reason"), 520)
+    if not blocked_reason:
+        missing_nodes = [node.content for node in nodes if node.status in {"unverified", "missing", "conflict"}]
+        blocked_reason = "；".join(missing_nodes[:3])
+    output_summary = compact_text(raw.get("output_summary"), 520) or (
+        f"大模型已生成 {len(nodes)} 个 flowchart 节点、{len(edges)} 条拓扑关系。"
+    )
+
+    raw_mermaid = str(raw.get("mermaid") or "").strip()
+    generation_mode = "llm" if raw_mermaid.startswith(("flowchart TD", "flowchart LR")) else "llm_repaired"
+    if generation_mode == "llm_repaired":
+        warnings.append("LLM Mermaid 源码缺失或格式不规范，已根据结构化节点和边重建 flowchart。")
+
+    status = "needs_evidence" if any(node.status in {"unverified", "missing", "conflict"} for node in nodes) else "ready_for_review"
+    return LegalReasoningRun(
+        case_id=case.id,
+        status=status,
+        input_summary=summary,
+        graph_format="mermaid_flowchart",
+        mermaid_source=build_mermaid_source(nodes, edges),
+        generation_mode=generation_mode,  # type: ignore[arg-type]
+        validation_warnings=warnings,
+        nodes=nodes,
+        edges=edges,
+        follow_up_questions=follow_up_questions,
+        blocked_reason=blocked_reason if status == "needs_evidence" else "",
+        review_focus=review_focus,
+        output_summary=output_summary,
+    )
+
+
+def generate_llm_reasoning_run(
+    case: Case,
+    memories: list[CaseMemory],
+    messages: list[WechatMessage],
+    documents: list[LegalDocument],
+    fallback_run: LegalReasoningRun,
+) -> LegalReasoningRun | None:
+    context = build_reasoning_context(case, memories, messages, documents, research_results(case.id))
+    prompt = f"""请基于以下案件信息生成法律推理拓扑图。
+只能输出 JSON 对象，不要输出 Markdown 或解释。
+
+JSON 字段：
+- mermaid: 必须是 Mermaid flowchart TD 或 flowchart LR 源码
+- nodes: 节点数组，每个节点包含 id, label, type, status, confidence, summary, source_refs
+- edges: 边数组，每条边包含 source, target, relation_type, label
+- unverified_points: 无法证实、证据冲突或信息缺失的事项
+- follow_up_questions: 下一轮追问问题
+- review_focus: 人工复核重点
+- blocked_reason: 如仍需补证，说明暂停点
+- output_summary: 100字以内图谱摘要
+
+强制规则：
+1. 节点 id 只使用 N1、N2、N3 这类 ASCII 标识，边必须引用已有节点 id。
+2. type 只能是 Fact, Evidence, Timeline, Issue, Rule, Analysis, Conclusion, Uncertainty, Question。
+3. status 只能是 verified, probable, unverified, missing, conflict。
+4. 即使事实或证据没有补全，也必须生成 flowchart；缺失处用 missing，无法证实处用 unverified，冲突处用 conflict。
+5. 不要输出模型内部长链思考，只输出可审查的结构化摘要。
+6. 结论节点不能伪装成确定意见；若上游证据不足，应连接到 Uncertainty 或 Question 节点。
+
+案件信息：
+{context[:18000]}
+"""
+    content, _model = call_llm_chat_completion(
+        [
+            {
+                "role": "system",
+                "content": "你是法律案件推理图生成器，负责把事实、证据、法律规则、争点、结论和缺口组织为可审查的 Mermaid flowchart。",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.15,
+        timeout=50,
+    )
+    if not content:
+        return None
+    raw = extract_json_object(content)
+    if raw is None:
+        return None
+    return normalize_llm_reasoning_run(
+        case=case,
+        summary=fallback_run.input_summary,
+        raw=raw,
+        fallback_run=fallback_run,
+    )
+
+
+@app.post("/api/reasoning/cases/{case_id}/generate")
+async def generate_reasoning(case_id: str) -> LegalReasoningRun:
+    case = store.get("cases", case_id, Case)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    memories = case_memories(case_id)
+    messages = case_messages(case)
+    documents = case_documents(case_id)
+
+    fallback_run = build_rule_reasoning_run(case, memories, messages, documents)
+    api_key, _base_url, _model = llm_settings()
+    llm_run: LegalReasoningRun | None = None
+    if api_key:
+        llm_run = generate_llm_reasoning_run(case, memories, messages, documents, fallback_run)
+        if llm_run is None:
+            fallback_run.validation_warnings.append("LLM 未返回可用 flowchart，已使用规则 fallback。")
+    else:
+        fallback_run.validation_warnings.append("未配置 LLM API key，已使用规则 fallback flowchart。")
+    run = llm_run or fallback_run
+
     store.add("legal_reasoning_runs", run)
-    for content in follow_up_questions:
+    for content in run.follow_up_questions:
         store.add(
             "follow_up_questions",
             FollowUpQuestion(case_id=case_id, reasoning_run_id=run.id, content=content),

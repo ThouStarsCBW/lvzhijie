@@ -6,13 +6,18 @@ from fastapi.testclient import TestClient
 import pytest
 
 import app.main as main
+from app.mock_wechat_store import MockWechatStore
 from app.models import OpenClawConnection
+from app.seed import build_seed_data
 from app.store import JsonStore
 
 
 @pytest.fixture()
-def client(tmp_path) -> TestClient:
+def client(tmp_path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.delenv("LVZHIJIE_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     main.store = JsonStore(tmp_path / "store.json")
+    main.mock_wechat = MockWechatStore(tmp_path / "mock_wechat")
     return TestClient(main.app)
 
 
@@ -66,9 +71,26 @@ def test_seed_contains_anonymized_family_consultation_samples(client: TestClient
         assert cases[case_id]["title"] == title
         detail = client.get(f"/api/cases/{case_id}").json()
         assert len(detail["messages"]) >= 5
+        assert len(detail["tasks"]) >= 6
         assert len(detail["memories"]) >= 4
         assert len(detail["follow_up_questions"]) >= 3
+        assert len(detail["research_runs"]) >= 2
+        assert len(detail["research_results"]) >= 4
+        assert len(detail["reasoning_runs"]) >= 1
+        assert len(detail["documents"]) >= 1
         assert len(detail["reply_jobs"]) == 1
+        assert any(
+            task["task_type"] in {"similar_case_search", "regulation_search"}
+            and task["research_results"]
+            for task in detail["tasks"]
+        )
+        assert any(question["status"] == "draft" for question in detail["follow_up_questions"])
+        reasoning = detail["reasoning_runs"][-1]
+        assert len(reasoning["nodes"]) >= 8
+        assert len(reasoning["follow_up_questions"]) >= 3
+        document = client.get(f"/api/documents/{detail['documents'][0]['id']}").json()
+        assert len(document["revisions"]) >= 3
+        assert len(document["branches"]) >= 2
 
         sample_payload = json.dumps(
             {
@@ -95,6 +117,82 @@ def test_seed_contains_anonymized_family_consultation_samples(client: TestClient
             "指导性案例272号：",
         ]
         assert not any(fragment in sample_payload for fragment in forbidden_fragments)
+
+
+def test_normalize_cleans_full_traffic_demo_research_task_titles(tmp_path) -> None:
+    data = build_seed_data()
+    data["cases"].append(
+        {
+            "id": "case_f78b3960fc11",
+            "title": "刘家属（完整样例）交通事故咨询",
+            "case_type": "traffic",
+            "status": "collecting_info",
+            "summary": "完整交通事故样例。",
+            "wechat_contact_ref": "contact_traffic_unknown_full",
+            "conversation_ref": "conv_traffic_unknown_full",
+            "created_at": "2026-06-03T09:00:00+08:00",
+            "updated_at": "2026-06-03T09:00:00+08:00",
+        }
+    )
+    data["case_tasks"].extend(
+        [
+            {
+                "id": "task_traffic_full_similar",
+                "case_id": "case_f78b3960fc11",
+                "title": "类案检索：律师在吗？我家人出车祸了，对方死人了，他可能要坐牢！ 2023年",
+                "description": "律师在吗？我家人出车祸了，对方死人了，他可能要坐牢！",
+                "task_type": "similar_case_search",
+                "status": "waiting_owner_review",
+                "priority": "medium",
+                "assigned_agent_role": "法律检索 Agent",
+                "due_at": None,
+                "depends_on_task_ids": [],
+                "document_id": None,
+                "base_revision_id": None,
+                "target_revision_id": None,
+                "output_document_id": None,
+                "output_revision_id": None,
+                "metadata": {},
+                "result_summary": "",
+                "created_at": "2026-06-03T09:00:00+08:00",
+                "updated_at": "2026-06-03T09:00:00+08:00",
+            },
+            {
+                "id": "task_traffic_full_law",
+                "case_id": "case_f78b3960fc11",
+                "title": "法规检索：律师在吗？我家人出车祸了，对方死人了，他可能要坐牢！ 2023年",
+                "description": "律师在吗？我家人出车祸了，对方死人了，他可能要坐牢！",
+                "task_type": "regulation_search",
+                "status": "waiting_owner_review",
+                "priority": "medium",
+                "assigned_agent_role": "法律检索 Agent",
+                "due_at": None,
+                "depends_on_task_ids": [],
+                "document_id": None,
+                "base_revision_id": None,
+                "target_revision_id": None,
+                "output_document_id": None,
+                "output_revision_id": None,
+                "metadata": {},
+                "result_summary": "",
+                "created_at": "2026-06-03T09:00:00+08:00",
+                "updated_at": "2026-06-03T09:00:00+08:00",
+            },
+        ]
+    )
+    path = tmp_path / "store.json"
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    store = JsonStore(path)
+    titles = {
+        task["task_type"]: task["title"]
+        for task in store.data["case_tasks"]
+        if task.get("case_id") == "case_f78b3960fc11"
+    }
+
+    assert titles["similar_case_search"] == "类案检索：交通事故逃逸与刑事因果关系"
+    assert titles["regulation_search"] == "法规检索：交通肇事罪、逃逸责任与事故认定"
+    assert "律师在吗" not in json.dumps(store.data["case_tasks"], ensure_ascii=False)
 
 
 def test_upload_revision_and_diff_flow(client: TestClient) -> None:
@@ -188,12 +286,19 @@ def test_delete_case_cascades_owned_rows_and_unbinds_conversation(client: TestCl
     assert demo["case_id"] is None
 
 
-def test_reasoning_creates_followups_and_mock_send(client: TestClient) -> None:
+def test_reasoning_creates_followups_and_mock_send(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LVZHIJIE_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     connection = OpenClawConnection(transport_mode="mock")
     assert client.put("/api/openclaw/connection", json=connection.model_dump()).status_code == 200
 
     generated = client.post("/api/reasoning/cases/case_demo/generate")
     assert generated.status_code == 200
+    run = generated.json()
+    assert run["graph_format"] == "mermaid_flowchart"
+    assert run["mermaid_source"].startswith("flowchart ")
+    assert run["generation_mode"] == "rule_fallback"
+    assert any(node["status"] in {"missing", "unverified"} for node in run["nodes"])
 
     detail = client.get("/api/cases/case_demo").json()
     questions = detail["follow_up_questions"]
@@ -204,6 +309,70 @@ def test_reasoning_creates_followups_and_mock_send(client: TestClient) -> None:
     payload = sent.json()
     assert payload["question"]["status"] == "sent_via_openclaw"
     assert payload["message"]["status"] == "sent_via_openclaw"
+
+
+def test_reasoning_uses_llm_flowchart_and_marks_unverified(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LVZHIJIE_LLM_API_KEY", "test-key")
+
+    def fake_llm(messages, *, temperature=0.2, timeout=35):
+        payload = {
+            "mermaid": "flowchart TD\n  N1 --> N2\n  N2 --> N3",
+            "nodes": [
+                {
+                    "id": "N1",
+                    "label": "客户主张欠薪",
+                    "type": "Fact",
+                    "status": "probable",
+                    "confidence": 0.72,
+                    "summary": "客户称公司存在拖欠工资。",
+                    "source_refs": ["msg_demo_1"],
+                },
+                {
+                    "id": "N2",
+                    "label": "欠薪金额",
+                    "type": "Uncertainty",
+                    "status": "unverified",
+                    "confidence": 0.35,
+                    "summary": "欠薪月份和金额尚未核实。",
+                    "source_refs": [],
+                },
+                {
+                    "id": "N3",
+                    "label": "补充流水",
+                    "type": "Question",
+                    "status": "missing",
+                    "confidence": 0.9,
+                    "summary": "请补充工资流水和劳动合同。",
+                    "source_refs": [],
+                },
+            ],
+            "edges": [
+                {"source": "N1", "target": "N2", "relation_type": "uncertain_about", "label": "待核实"},
+                {"source": "N2", "target": "N3", "relation_type": "asks", "label": "追问"},
+            ],
+            "unverified_points": ["欠薪月份和金额尚未核实"],
+            "follow_up_questions": ["请补充工资流水和劳动合同。"],
+            "review_focus": ["证据完整性"],
+            "blocked_reason": "欠薪月份和金额尚未核实",
+            "output_summary": "已生成大模型推理 flowchart。",
+        }
+        return json.dumps(payload, ensure_ascii=False), "test-model"
+
+    monkeypatch.setattr(main, "call_llm_chat_completion", fake_llm)
+
+    generated = client.post("/api/reasoning/cases/case_demo/generate")
+
+    assert generated.status_code == 200
+    run = generated.json()
+    assert run["generation_mode"] == "llm"
+    assert run["mermaid_source"].startswith("flowchart TD")
+    assert "class N2 unverified" in run["mermaid_source"]
+    assert run["status"] == "needs_evidence"
+    assert any(node["status"] == "unverified" for node in run["nodes"])
+    assert run["follow_up_questions"] == ["请补充工资流水和劳动合同。"]
 
 
 def test_create_case_from_conversation_summarizes_chat_without_llm(
@@ -738,3 +907,28 @@ def test_delete_document_cascades_branches_and_analyses(client: TestClient) -> N
     # Verify tree has no branches for this document
     tree_resp = client.get(f"/api/documents/{document_id}/tree")
     assert tree_resp.status_code == 404
+
+
+def test_agent_chat_retrieves_local_context_without_llm(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LVZHIJIE_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    agents = client.get("/api/agents").json()
+    agent = next(item for item in agents if item["role"] == "legal_researcher")
+
+    response = client.post(
+        f"/api/agents/{agent['id']}/chat",
+        json={"content": "请根据本地资料梳理拖欠工资和劳动合同证据。"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["agent_message"]["source"] == "rule_fallback"
+    assert payload["retrieved_contexts"]
+    assert any("工资" in item["excerpt"] or "劳动" in item["title"] for item in payload["retrieved_contexts"])
+
+    history = client.get(f"/api/agents/{agent['id']}/chat")
+    assert history.status_code == 200
+    assert [item["sender"] for item in history.json()[-2:]] == ["user", "agent"]

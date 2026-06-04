@@ -1,6 +1,8 @@
 import type {
   ActivityEvent,
   AgentArchitecture,
+  AgentChatMessage,
+  AgentChatResponse,
   CaseItem,
   CaseMemory,
   CaseTask,
@@ -283,6 +285,13 @@ export const api = {
 
   agents: () => request<LegalAgent[]>("/api/agents"),
   agentArchitecture: () => request<AgentArchitecture>("/api/agents/architecture"),
+  agentChatMessages: (agentId: string) =>
+    request<AgentChatMessage[]>(`/api/agents/${agentId}/chat`),
+  sendAgentMessage: (agentId: string, content: string) =>
+    request<AgentChatResponse>(`/api/agents/${agentId}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
   documents: (caseId?: string) => {
     const suffix = caseId ? `?case_id=${encodeURIComponent(caseId)}` : "";
     return request<LegalDocument[]>(`/api/documents${suffix}`);

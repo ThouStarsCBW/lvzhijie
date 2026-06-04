@@ -14,20 +14,17 @@
           <Badge :tone="run.status === 'needs_evidence' ? 'amber' : 'green'">
             {{ reasoningStatusLabel(run.status) }}
           </Badge>
+          <Badge :tone="run.generation_mode === 'llm' ? 'blue' : 'slate'">
+            {{ generationModeLabel(run.generation_mode) }}
+          </Badge>
           <p class="muted small">{{ run.output_summary }}</p>
           <p v-if="run.blocked_reason" class="muted small">暂停点：{{ run.blocked_reason }}</p>
+          <p v-for="warning in run.validation_warnings" :key="warning" class="muted small">校验：{{ warning }}</p>
           <div class="agent-chip-row">
             <span v-for="item in run.review_focus" :key="item" class="agent-chip">{{ item }}</span>
           </div>
         </div>
-        <div class="reasoning-canvas">
-          <article v-for="node in run.nodes" :key="node.id" class="reasoning-node">
-            <Badge :tone="toneFor(node.node_type)">{{ nodeTypeLabel(node.node_type) }}</Badge>
-            <h3>{{ node.label }}</h3>
-            <p class="muted small">{{ node.content }}</p>
-            <div class="small">置信度 {{ Math.round(node.confidence * 100) }}%</div>
-          </article>
-        </div>
+        <ReasoningFlowchart :run="run" />
       </section>
       <section class="panel">
         <h2 class="panel-title">待追问问题</h2>
@@ -64,6 +61,7 @@ import { onMounted, ref, watch } from "vue";
 
 import Badge from "@/components/Badge.vue";
 import PageHeader from "@/components/PageHeader.vue";
+import ReasoningFlowchart from "@/components/ReasoningFlowchart.vue";
 import { api } from "@/services/api";
 import type { CaseItem, LegalReasoningRun } from "@/types";
 
@@ -100,25 +98,20 @@ async function sendFollowUp(questionId: string) {
   detail.value = await api.caseDetail(selectedCaseId.value);
 }
 
-function nodeTypeLabel(type: string) {
-  return {
-    Conclusion: "结论",
-    Uncertainty: "不确定点",
-    Question: "问题",
-    Issue: "争点",
-    Fact: "事实",
-    Evidence: "证据",
-    Rule: "规则",
-    Analysis: "分析",
-  }[type] ?? type;
-}
-
 function questionStatusLabel(status: string) {
   return {
     pending: "待发送",
     sent_via_openclaw: "已通过微信桥发送",
     failed: "发送失败",
   }[status] ?? status;
+}
+
+function generationModeLabel(mode: string) {
+  return {
+    llm: "大模型生成",
+    llm_repaired: "大模型修复",
+    rule_fallback: "规则兜底",
+  }[mode] ?? mode;
 }
 
 function relationLabel(type: string) {
@@ -140,13 +133,6 @@ function reasoningStatusLabel(status: string) {
     ready_for_review: "待复核",
     confirmed: "已确认",
   }[status] ?? status;
-}
-
-function toneFor(type: string): "blue" | "green" | "amber" | "red" | "slate" {
-  if (type === "Conclusion") return "green";
-  if (type === "Uncertainty" || type === "Question") return "amber";
-  if (type === "Issue") return "blue";
-  return "slate";
 }
 
 onMounted(async () => {
