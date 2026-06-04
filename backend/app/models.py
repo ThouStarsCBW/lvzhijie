@@ -310,6 +310,7 @@ class LegalResearchResult(BaseModel):
     case_id: str
     task_id: str | None = None
     result_type: Literal["similar_case", "regulation"]
+    external_id: str | None = None
     title: str
     source: str = ""
     reference: str = ""
@@ -317,6 +318,7 @@ class LegalResearchResult(BaseModel):
     relevance_score: float = 0.75
     key_points: list[str] = Field(default_factory=list)
     url: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     verified: bool = False
     created_at: str = Field(default_factory=now_iso)
 
@@ -508,6 +510,11 @@ class TaskCommentCreateRequest(BaseModel):
 class TaskExecuteRequest(BaseModel):
     query: str | None = None
     keywords: list[str] = Field(default_factory=list)
+    page_no: int = Field(default=1, ge=1)
+    page_size: int = Field(default=10, ge=1, le=100)
+    sort_field: str = "correlation"
+    sort_order: Literal["asc", "desc"] = "desc"
+    field_name: Literal["title", "semantic"] = "semantic"
     content_text: str | None = None
     title: str | None = None
     document_id: str | None = None

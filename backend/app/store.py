@@ -73,6 +73,18 @@ class JsonStore:
                     task[field] = default
                     changed = True
 
+        for result in self.data.get("legal_research_results", []):
+            if not isinstance(result, dict):
+                continue
+            defaults = {
+                "external_id": None,
+                "metadata": {},
+            }
+            for field, default in defaults.items():
+                if field not in result:
+                    result[field] = default
+                    changed = True
+
         existing_agent_roles = {
             item.get("role")
             for item in self.data.get("legal_agents", [])

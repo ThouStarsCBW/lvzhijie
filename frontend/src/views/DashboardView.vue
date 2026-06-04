@@ -1,5 +1,5 @@
 <template>
-  <PageHeader title="总览" description="四大核心能力集成在同一个个人法律智能工作台内。">
+  <PageHeader title="总览" description="核心法律能力集成在同一个个人法律智能工作台内。">
     <button class="button" @click="load">刷新</button>
     <RouterLink class="button primary" to="/wechat">进入客户工作台</RouterLink>
   </PageHeader>
@@ -35,7 +35,7 @@
       </div>
     </section>
 
-    <section class="core-grid" aria-label="四大核心功能">
+    <section class="core-grid" aria-label="核心功能">
       <RouterLink v-for="module in modules" :key="module.title" :to="module.to" class="module-panel">
         <div class="module-topline">
           <component :is="module.icon" class="module-icon" />
@@ -63,7 +63,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Bot, FileDiff, GitBranch, MessageCircle } from "lucide-vue-next";
+import { Bot, FileDiff, GitBranch, MessageCircle, Search } from "lucide-vue-next";
 
 import Badge from "@/components/Badge.vue";
 import PageHeader from "@/components/PageHeader.vue";
@@ -100,7 +100,17 @@ const modules = computed(() => [
     icon: FileDiff,
   },
   {
-    title: "3. 案件管理与推理分析",
+    title: "3. 类案与法规检索",
+    description: "以案件事实为上下文生成类案、法规和裁判规则检索方向。",
+    metric: `${numberOf("research_runs")} 次检索 / ${numberOf("research_results")} 条结果`,
+    status: "法律检索",
+    tone: "blue" as BadgeTone,
+    action: "进入检索中心",
+    to: "/research",
+    icon: Search,
+  },
+  {
+    title: "4. 案件管理与推理分析",
     description: "以案件为业务容器，沉淀事实、证据、任务、推理图、追问和回复工作流。",
     metric: `${numberOf("cases")} 个案件 / ${numberOf("reasoning_runs")} 次推理 / ${numberOf("reply_jobs")} 个回复任务`,
     status: "案件中枢",
@@ -110,7 +120,7 @@ const modules = computed(() => [
     icon: GitBranch,
   },
   {
-    title: "4. 仿律所智能体协同",
+    title: "5. 仿律所智能体协同",
     description: "主任律师、接待、秘书、承办、合同审查、诉讼策略等角色协同。",
     metric: "9 个律所角色",
     status: "角色协同",

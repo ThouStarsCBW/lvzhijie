@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from io import BytesIO
+from html import unescape
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
@@ -16,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.diffing import build_char_diff, build_paragraph_diff, summarize_legal_risks
+from app.legal_search_adapter import DelilegalSearchClient, LegalSearchApiError
 from app.models import (
     ActivityEvent,
     AgentArchitecture,
@@ -883,120 +886,270 @@ def extract_research_keywords(case: Case, query: str, memories: list[CaseMemory]
     return [item for item in keywords if not (item in seen or seen.add(item))][:8]
 
 
-def fallback_similar_case_results(
+SEARCH_MARKUP_RE = re.compile(r"<[^>]+>")
+
+
+def legal_search_client() -> DelilegalSearchClient:
+    return DelilegalSearchClient()
+
+
+def clean_search_text(value: Any) -> str:
+    return " ".join(unescape(SEARCH_MARKUP_RE.sub("", str(value or ""))).split())
+
+
+def truncate_search_text(value: Any, limit: int = 180) -> str:
+    text = clean_search_text(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def metadata_keywords(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned = [clean_search_text(item) for item in value]
+    return [item for item in cleaned if item]
+
+
+def normalize_highlights(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    points: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            text = truncate_search_text(item)
+        elif isinstance(item, dict):
+            text = truncate_search_text(item.get("content") or item.get("text") or item.get("fragment") or item)
+        else:
+            text = truncate_search_text(item)
+        if text:
+            points.append(text)
+    return points
+
+
+def ensure_search_api_success(response: dict[str, Any], label: str) -> None:
+    if response.get("success"):
+        return
+    code = response.get("code")
+    msg = response.get("msg") or "未知错误"
+    raise LegalSearchApiError(f"{label}失败：{msg}", code=int(code) if isinstance(code, int) else None, raw_payload=response)
+
+
+def research_relevance(index: int) -> float:
+    return max(0.5, 0.95 - index * 0.03)
+
+
+def build_similar_case_results(
     *,
     run: LegalResearchRun,
     case: Case,
-    keywords: list[str],
+    api_response: dict[str, Any],
 ) -> list[LegalResearchResult]:
-    topic = "、".join(keywords[:3]) or case_type_label(case.case_type)
-    return [
-        LegalResearchResult(
-            run_id=run.id,
-            case_id=case.id,
-            task_id=run.task_id,
-            result_type="similar_case",
-            title=f"{case_type_label(case.case_type)}类案方向：{topic}",
-            source="类案检索任务",
-            reference="裁判规则方向，需接入正式案例库后核验案号与裁判日期",
-            court_or_authority="人民法院裁判文书/案例库",
-            relevance_score=0.86,
-            key_points=[
-                "优先检索事实结构、请求基础和证据缺口相近的裁判。",
-                "比对法院对证明责任、关键证据和金额计算的处理方式。",
-                "标记对本案不利的裁判理由，供主任律师复核。",
-            ],
-        ),
-        LegalResearchResult(
-            run_id=run.id,
-            case_id=case.id,
-            task_id=run.task_id,
-            result_type="similar_case",
-            title=f"{topic}争议焦点与举证责任类案",
-            source="类案检索任务",
-            reference="裁判规则方向，待人工核验",
-            court_or_authority="基层/中级人民法院",
-            relevance_score=0.78,
-            key_points=[
-                "关注法院是否要求提交合同、聊天记录、流水、通知文件等直接证据。",
-                "关注对时效、通知、解除、违约金调整等抗辩的采纳标准。",
-            ],
-        ),
-    ]
+    results: list[LegalResearchResult] = []
+    for index, item in enumerate(api_response.get("data", [])):
+        if not isinstance(item, dict):
+            continue
+        key_points = [
+            point
+            for point in [
+                f"案由：{clean_search_text(item.get('cause'))}" if item.get("cause") else "",
+                f"裁判类型：{clean_search_text(item.get('judgement_type'))}" if item.get("judgement_type") else "",
+                f"审级：{clean_search_text(item.get('level_of_trial'))}" if item.get("level_of_trial") else "",
+                f"裁判摘要：{truncate_search_text(item.get('content'))}" if item.get("content") else "",
+            ]
+            if point
+        ][:5]
+        external_id = clean_search_text(item.get("id")) or None
+        reference_parts = [
+            clean_search_text(item.get("case_number")),
+            clean_search_text(item.get("judgement_date")),
+            clean_search_text(item.get("publish_type_name")),
+        ]
+        results.append(
+            LegalResearchResult(
+                run_id=run.id,
+                case_id=case.id,
+                task_id=run.task_id,
+                result_type="similar_case",
+                external_id=external_id,
+                title=clean_search_text(item.get("title")) or "未命名类案",
+                source="法狗狗案例库",
+                reference=" · ".join(part for part in reference_parts if part) or (external_id or ""),
+                court_or_authority=clean_search_text(item.get("court")),
+                relevance_score=research_relevance(index),
+                key_points=key_points or ["真实案例库返回结果，建议律师复核裁判要旨、法院层级和事实相似度。"],
+                metadata={
+                    "provider": "delilegal",
+                    "query_id": api_response.get("query_id"),
+                    "api_code": api_response.get("code"),
+                    "case_type": item.get("case_type"),
+                    "cause": item.get("cause"),
+                    "judgement_type": item.get("judgement_type"),
+                    "judgement_date": item.get("judgement_date"),
+                    "case_number": item.get("case_number"),
+                    "level_of_trial": item.get("level_of_trial"),
+                    "publish_type": item.get("publish_type"),
+                    "publish_type_name": item.get("publish_type_name"),
+                },
+            )
+        )
+    return results
 
 
-def fallback_regulation_results(
+def build_regulation_results(
     *,
     run: LegalResearchRun,
     case: Case,
-    keywords: list[str],
+    api_response: dict[str, Any],
 ) -> list[LegalResearchResult]:
-    base_points = {
-        "labor": ["劳动报酬支付", "解除/离职事实", "劳动仲裁时效"],
-        "contract": ["合同成立与履行", "违约责任", "解除与争议解决"],
-        "debt": ["借贷合意", "款项交付", "诉讼时效"],
-        "company": ["公司决议效力", "股东权利", "交易授权"],
-        "criminal": ["强制措施", "证据合法性", "程序节点"],
-    }.get(case.case_type, ["法律关系识别", "请求基础", "证据与时效"])
-    topic = "、".join(keywords[:3]) or case_type_label(case.case_type)
-    return [
-        LegalResearchResult(
-            run_id=run.id,
-            case_id=case.id,
-            task_id=run.task_id,
-            result_type="regulation",
-            title=f"{case_type_label(case.case_type)}法规检索方向：{topic}",
-            source="法规检索任务",
-            reference="法律、司法解释、部门规章及地方规则方向，需人工核验现行有效性",
-            court_or_authority="全国人大/最高人民法院/主管部门",
-            relevance_score=0.88,
-            key_points=[f"核对{point}相关条文。" for point in base_points],
-        ),
-        LegalResearchResult(
-            run_id=run.id,
-            case_id=case.id,
-            task_id=run.task_id,
-            result_type="regulation",
-            title="程序与时效规则核验",
-            source="法规检索任务",
-            reference="诉讼/仲裁/行政程序规则方向，待人工核验",
-            court_or_authority="最高人民法院及主管机构",
-            relevance_score=0.72,
-            key_points=[
-                "核对管辖、期间、送达、证据提交和保全规则。",
-                "如涉及劳动、交通、刑事等特别程序，应优先核验专门规则。",
-            ],
-        ),
-    ]
+    results: list[LegalResearchResult] = []
+    for index, item in enumerate(api_response.get("data", [])):
+        if not isinstance(item, dict):
+            continue
+        highlights = normalize_highlights(item.get("highlights"))
+        fallback_points = [
+            point
+            for point in [
+                f"文号：{clean_search_text(item.get('issued_no'))}" if item.get("issued_no") else "",
+                f"层级：{clean_search_text(item.get('level_name'))}" if item.get("level_name") else "",
+                f"时效性：{clean_search_text(item.get('timeliness_name'))}" if item.get("timeliness_name") else "",
+                f"发布日期：{clean_search_text(item.get('publish_date'))}" if item.get("publish_date") else "",
+            ]
+            if point
+        ]
+        external_id = clean_search_text(item.get("id")) or None
+        reference_parts = [
+            clean_search_text(item.get("issued_no")),
+            clean_search_text(item.get("publish_date")),
+            clean_search_text(item.get("timeliness_name")),
+        ]
+        results.append(
+            LegalResearchResult(
+                run_id=run.id,
+                case_id=case.id,
+                task_id=run.task_id,
+                result_type="regulation",
+                external_id=external_id,
+                title=clean_search_text(item.get("title")) or "未命名法规",
+                source="法狗狗法规库",
+                reference=" · ".join(part for part in reference_parts if part) or (external_id or ""),
+                court_or_authority=clean_search_text(item.get("publisher_name")),
+                relevance_score=research_relevance(index),
+                key_points=(highlights or fallback_points)[:5]
+                or ["真实法规库返回结果，建议律师点击法规详情核验全文、时效和适用范围。"],
+                metadata={
+                    "provider": "delilegal",
+                    "query_id": api_response.get("query_id"),
+                    "api_code": api_response.get("code"),
+                    "issued_no": item.get("issued_no"),
+                    "publish_date": item.get("publish_date"),
+                    "publisher_name": item.get("publisher_name"),
+                    "active_date": item.get("active_date"),
+                    "timeliness_name": item.get("timeliness_name"),
+                    "level_name": item.get("level_name"),
+                    "highlights": item.get("highlights", []),
+                },
+            )
+        )
+    return results
+
+
+def mark_research_task_failed(task: CaseTask, run: LegalResearchRun, failure_reason: str) -> CaseTask:
+    run.status = "failed"
+    run.failure_reason = failure_reason
+    run.summary = failure_reason
+    run.completed_at = now_iso()
+    store.update("legal_research_runs", run)
+    task.status = "blocked"
+    task.result_summary = f"真实 API 调用失败：{failure_reason}"
+    task.metadata = {
+        **task.metadata,
+        "research_run_id": run.id,
+        "api_provider": "delilegal",
+        "api_success": False,
+        "api_failure_reason": failure_reason,
+    }
+    task.updated_at = now_iso()
+    store.update("case_tasks", task)
+    add_task_comment(case_id=task.case_id, task_id=task.id, message=task.result_summary)
+    return task
 
 
 def execute_research_task(case: Case, task: CaseTask, payload: TaskExecuteRequest) -> CaseTask:
-    query = (payload.query or task.metadata.get("query") or task.description or case.summary or case.title).strip()
+    query = clean_search_text(payload.query or task.metadata.get("query") or task.description or case.summary or case.title)
     search_type = "similar_case" if task.task_type == "similar_case_search" else "regulation"
-    keywords = payload.keywords or extract_research_keywords(case, query, case_memories(case.id))
+    explicit_keywords = metadata_keywords(payload.keywords) or metadata_keywords(task.metadata.get("keywords"))
+    keywords = explicit_keywords or extract_research_keywords(case, query, case_memories(case.id))
+    search_text = query or " ".join(keywords) or case.title
     run = LegalResearchRun(
         case_id=case.id,
         task_id=task.id,
         search_type=search_type,  # type: ignore[arg-type]
-        query=query,
+        query=search_text,
         keywords=keywords,
     )
     store.add("legal_research_runs", run)
-    results = (
-        fallback_similar_case_results(run=run, case=case, keywords=keywords)
-        if search_type == "similar_case"
-        else fallback_regulation_results(run=run, case=case, keywords=keywords)
-    )
+
+    try:
+        client = legal_search_client()
+        if search_type == "similar_case":
+            api_response = client.search_cases(
+                keyword=search_text,
+                page_no=payload.page_no,
+                page_size=payload.page_size,
+                sort_field=payload.sort_field,
+                sort_order=payload.sort_order,
+            )
+            ensure_search_api_success(api_response, "类案检索")
+            results = build_similar_case_results(run=run, case=case, api_response=api_response)
+        else:
+            law_keywords = explicit_keywords or [search_text]
+            api_response = client.search_laws(
+                keywords=law_keywords,
+                field_name=payload.field_name,
+                page_no=payload.page_no,
+                page_size=payload.page_size,
+                sort_field=payload.sort_field,
+                sort_order=payload.sort_order,
+            )
+            ensure_search_api_success(api_response, "法规检索")
+            results = build_regulation_results(run=run, case=case, api_response=api_response)
+    except LegalSearchApiError as exc:
+        return mark_research_task_failed(task, run, str(exc))
+    except Exception as exc:
+        return mark_research_task_failed(task, run, f"检索服务异常：{exc}")
+
     for result in results:
         store.add("legal_research_results", result)
     run.status = "completed"
     run.result_count = len(results)
-    run.summary = f"已形成{len(results)}条{('类案' if search_type == 'similar_case' else '法规')}检索方向，关键词：{'、'.join(keywords)}。"
+    run.summary = (
+        f"已调用法狗狗真实 API，返回 {len(results)} 条"
+        f"{'类案' if search_type == 'similar_case' else '法规'}结果"
+        f"（总数 {api_response.get('total_count', 0)}，queryId {api_response.get('query_id') or '无'}）。"
+    )
     run.completed_at = now_iso()
     store.update("legal_research_runs", run)
     task.status = "waiting_owner_review"
     task.result_summary = run.summary
-    task.metadata = {**task.metadata, "research_run_id": run.id, "keywords": keywords, "query": query}
+    task.metadata = {
+        **task.metadata,
+        "research_run_id": run.id,
+        "keywords": keywords,
+        "query": search_text,
+        "api_provider": "delilegal",
+        "api_success": True,
+        "api_query_id": api_response.get("query_id"),
+        "api_total_count": api_response.get("total_count"),
+        "api_total_page": api_response.get("total_page"),
+        "api_code": api_response.get("code"),
+        "api_msg": api_response.get("msg"),
+        "page_no": payload.page_no,
+        "page_size": payload.page_size,
+        "sort_field": payload.sort_field,
+        "sort_order": payload.sort_order,
+        "field_name": payload.field_name,
+    }
     task.updated_at = now_iso()
     store.update("case_tasks", task)
     store.add(
@@ -1005,7 +1158,7 @@ def execute_research_task(case: Case, task: CaseTask, payload: TaskExecuteReques
             case_id=case.id,
             kind="note",
             content=f"{task.title}：{run.summary}",
-            confidence=0.72,
+            confidence=0.82,
             source_ref=run.id,
         ),
     )
@@ -1251,6 +1404,8 @@ async def dashboard_summary() -> dict[str, object]:
     documents = store.list("legal_documents", LegalDocument)
     runs = store.list("legal_reasoning_runs", LegalReasoningRun)
     reply_jobs = store.list("reply_jobs", LegalReplyJob)
+    legal_research_runs = store.list("legal_research_runs", LegalResearchRun)
+    legal_research_results = store.list("legal_research_results", LegalResearchResult)
     return {
         "cases": len(cases),
         "open_cases": len([case for case in cases if case.status != "closed"]),
@@ -1259,6 +1414,8 @@ async def dashboard_summary() -> dict[str, object]:
         "messages": len(messages),
         "documents": len(documents),
         "reasoning_runs": len(runs),
+        "research_runs": len(legal_research_runs),
+        "research_results": len(legal_research_results),
         "reply_jobs": len(reply_jobs),
         "queued_reply_jobs": len([job for job in reply_jobs if job.status in {"queued", "reasoning"}]),
         "openclaw": (await OpenClawWechatAdapter(connection()).get_status()).model_dump(),
@@ -1778,6 +1935,66 @@ async def execute_task(case_id: str, task_id: str, payload: TaskExecuteRequest |
         executed = task
     record("case.task.executed", "执行案件任务", executed.title, entity_type="case", entity_id=case_id)
     return executed
+
+
+def raise_legal_search_http_error(exc: LegalSearchApiError) -> None:
+    raise HTTPException(
+        status_code=502,
+        detail={
+            "message": str(exc),
+            "code": exc.code,
+        },
+    )
+
+
+@app.post("/api/legal-research/cases/search")
+async def direct_similar_case_search(payload: TaskExecuteRequest) -> dict[str, Any]:
+    keyword = clean_search_text(payload.query) or " ".join(metadata_keywords(payload.keywords))
+    if not keyword:
+        raise HTTPException(status_code=422, detail="Search query cannot be empty")
+    try:
+        response = legal_search_client().search_cases(
+            keyword=keyword,
+            page_no=payload.page_no,
+            page_size=payload.page_size,
+            sort_field=payload.sort_field,
+            sort_order=payload.sort_order,
+        )
+        ensure_search_api_success(response, "类案检索")
+        return response
+    except LegalSearchApiError as exc:
+        raise_legal_search_http_error(exc)
+
+
+@app.post("/api/legal-research/laws/search")
+async def direct_law_search(payload: TaskExecuteRequest) -> dict[str, Any]:
+    keywords = metadata_keywords(payload.keywords) or [clean_search_text(payload.query)]
+    keywords = [item for item in keywords if item]
+    if not keywords:
+        raise HTTPException(status_code=422, detail="Search query cannot be empty")
+    try:
+        response = legal_search_client().search_laws(
+            keywords=keywords,
+            field_name=payload.field_name,
+            page_no=payload.page_no,
+            page_size=payload.page_size,
+            sort_field=payload.sort_field,
+            sort_order=payload.sort_order,
+        )
+        ensure_search_api_success(response, "法规检索")
+        return response
+    except LegalSearchApiError as exc:
+        raise_legal_search_http_error(exc)
+
+
+@app.get("/api/legal-research/laws/{law_id}/detail")
+async def direct_law_detail(law_id: str, merge: bool = True) -> dict[str, Any]:
+    try:
+        response = legal_search_client().get_law_detail(law_id=law_id, merge=merge)
+        ensure_search_api_success(response, "法规详情")
+        return response
+    except LegalSearchApiError as exc:
+        raise_legal_search_http_error(exc)
 
 
 @app.delete("/api/cases/{case_id}/tasks/{task_id}")

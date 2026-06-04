@@ -1,23 +1,5 @@
 [
   {
-    "id": "conv_guiding_case_269",
-    "openclaw_conversation_id": "mock_conv_guiding_case_269",
-    "contact_id": "contact_liumoujiang_family",
-    "case_id": "case_5bdf289b455c",
-    "status": "open",
-    "auto_reply_source": "openclaw",
-    "last_message_at": "2026-06-03T03:35:12.198965+00:00",
-    "unread_count": 0,
-    "contact": {
-      "id": "contact_liumoujiang_family",
-      "openclaw_contact_id": "mock_contact_liumoujiang_family",
-      "display_name": "刘某江家属",
-      "remark": "交通肇事无罪咨询",
-      "avatar_url": null,
-      "last_seen_at": "2026-06-03T02:18:06.461951+00:00"
-    }
-  },
-  {
     "id": "conv_5acfce59bc2a",
     "openclaw_conversation_id": "mock_conv_5acfce59bc2a",
     "contact_id": "contact_425f25087f25",
@@ -33,6 +15,78 @@
       "remark": "测试",
       "avatar_url": null,
       "last_seen_at": "2026-06-03T01:27:21.602728+00:00"
+    }
+  },
+  {
+    "id": "conv_family_225",
+    "openclaw_conversation_id": "mock_conv_family_225",
+    "contact_id": "contact_family_225",
+    "case_id": "case_family_225",
+    "status": "open",
+    "auto_reply_source": "openclaw",
+    "last_message_at": "2026-06-03T07:00:13.522536+00:00",
+    "unread_count": 0,
+    "contact": {
+      "id": "contact_family_225",
+      "openclaw_contact_id": "mock_contact_family_225",
+      "display_name": "江家属",
+      "remark": "校园防卫刑事咨询",
+      "avatar_url": null,
+      "last_seen_at": "2026-06-03T07:00:13.522533+00:00"
+    }
+  },
+  {
+    "id": "conv_family_269",
+    "openclaw_conversation_id": "mock_conv_family_269",
+    "contact_id": "contact_family_269",
+    "case_id": "case_family_269",
+    "status": "open",
+    "auto_reply_source": "openclaw",
+    "last_message_at": "2026-06-03T07:00:13.522618+00:00",
+    "unread_count": 0,
+    "contact": {
+      "id": "contact_family_269",
+      "openclaw_contact_id": "mock_contact_family_269",
+      "display_name": "刘家属",
+      "remark": "交通事故刑事责任咨询",
+      "avatar_url": null,
+      "last_seen_at": "2026-06-03T07:00:13.522614+00:00"
+    }
+  },
+  {
+    "id": "conv_family_272",
+    "openclaw_conversation_id": "mock_conv_family_272",
+    "contact_id": "contact_family_272",
+    "case_id": "case_family_272",
+    "status": "open",
+    "auto_reply_source": "openclaw",
+    "last_message_at": "2026-06-03T07:00:13.522689+00:00",
+    "unread_count": 0,
+    "contact": {
+      "id": "contact_family_272",
+      "openclaw_contact_id": "mock_contact_family_272",
+      "display_name": "艾家属",
+      "remark": "危险驾驶做局咨询",
+      "avatar_url": null,
+      "last_seen_at": "2026-06-03T07:00:13.522687+00:00"
+    }
+  },
+  {
+    "id": "conv_traffic_unknown_full",
+    "openclaw_conversation_id": "mock_conv_traffic_unknown_full",
+    "contact_id": "contact_traffic_unknown_full",
+    "case_id": "case_f78b3960fc11",
+    "status": "open",
+    "auto_reply_source": "openclaw",
+    "last_message_at": "2026-06-03T09:07:00+00:00",
+    "unread_count": 0,
+    "contact": {
+      "id": "contact_traffic_unknown_full",
+      "openclaw_contact_id": "mock_contact_traffic_unknown_full",
+      "display_name": "刘家属（完整样例）",
+      "remark": "交通肇事刑事责任抗辩",
+      "avatar_url": null,
+      "last_seen_at": "2026-06-04T00:08:59.456852+00:00"
     }
   }
 ]

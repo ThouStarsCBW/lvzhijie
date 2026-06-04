@@ -239,6 +239,7 @@ export type LegalResearchResult = {
   case_id: string;
   task_id?: string | null;
   result_type: "similar_case" | "regulation";
+  external_id?: string | null;
   title: string;
   source: string;
   reference: string;
@@ -246,6 +247,7 @@ export type LegalResearchResult = {
   relevance_score: number;
   key_points: string[];
   url?: string | null;
+  metadata: Record<string, unknown>;
   verified: boolean;
   created_at: string;
 };

@@ -179,6 +179,11 @@ export const api = {
     payload?: {
       query?: string;
       keywords?: string[];
+      page_no?: number;
+      page_size?: number;
+      sort_field?: string;
+      sort_order?: "asc" | "desc";
+      field_name?: "title" | "semantic";
       content_text?: string;
       title?: string;
       document_id?: string | null;
@@ -191,6 +196,23 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
+  lawDetail: (lawId: string, merge = true) =>
+    request<{
+      success: boolean;
+      code: number;
+      msg: string;
+      body?: {
+        id: string;
+        title: string;
+        issued_no?: string | null;
+        publish_date?: string | null;
+        publisher_name: string;
+        active_date?: string | null;
+        timeliness_name: string;
+        level_name: string;
+        law_detail_content?: string | null;
+      } | null;
+    }>(`/api/legal-research/laws/${encodeURIComponent(lawId)}/detail?merge=${merge ? "true" : "false"}`),
   taskComments: (caseId: string, taskId: string) =>
     request<CaseTaskComment[]>(`/api/cases/${caseId}/tasks/${taskId}/comments`),
   createTaskComment: (caseId: string, taskId: string, message: string) =>

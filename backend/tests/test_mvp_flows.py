@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 import pytest
 
@@ -50,6 +52,49 @@ def test_agent_architecture_exposes_dispatcher_and_departments(client: TestClien
     assert {department["title"] for department in client_service["departments"]} >= {"法律咨询", "接案报价", "投诉处理"}
     assert {department["title"] for department in compliance["departments"]} >= {"收案审批", "利益冲突审查", "风险评估"}
     assert {department["title"] for department in archive["departments"]} >= {"案卷归档", "档案查询"}
+
+
+def test_seed_contains_anonymized_family_consultation_samples(client: TestClient) -> None:
+    expected = {
+        "case_family_225": "江家属校园防卫刑事咨询",
+        "case_family_269": "刘家属交通事故刑事责任咨询",
+        "case_family_272": "艾家属危险驾驶做局咨询",
+    }
+    cases = {item["id"]: item for item in client.get("/api/cases").json()}
+
+    for case_id, title in expected.items():
+        assert cases[case_id]["title"] == title
+        detail = client.get(f"/api/cases/{case_id}").json()
+        assert len(detail["messages"]) >= 5
+        assert len(detail["memories"]) >= 4
+        assert len(detail["follow_up_questions"]) >= 3
+        assert len(detail["reply_jobs"]) == 1
+
+        sample_payload = json.dumps(
+            {
+                "case": detail["case"],
+                "messages": detail["messages"],
+                "memories": detail["memories"],
+                "follow_up_questions": detail["follow_up_questions"],
+                "reply_jobs": detail["reply_jobs"],
+            },
+            ensure_ascii=False,
+        )
+        forbidden_fragments = [
+            "某",
+            "江某",
+            "刘某",
+            "艾某",
+            "李某",
+            "聂某",
+            "方某",
+            "梁某",
+            ".pdf",
+            "指导性案例225号：",
+            "指导性案例269号：",
+            "指导性案例272号：",
+        ]
+        assert not any(fragment in sample_payload for fragment in forbidden_fragments)
 
 
 def test_upload_revision_and_diff_flow(client: TestClient) -> None:
@@ -223,7 +268,65 @@ def test_reply_workflow_creates_short_and_long_outputs(client: TestClient) -> No
     assert any(document["id"] == payload["output_document_id"] for document in detail["documents"])
 
 
-def test_task_center_executes_research_review_and_drafting(client: TestClient) -> None:
+def test_task_center_executes_research_review_and_drafting(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeLegalSearchClient:
+        def __init__(self) -> None:
+            self.case_calls = []
+            self.law_calls = []
+
+        def search_cases(self, **kwargs):
+            self.case_calls.append(kwargs)
+            return {
+                "success": True,
+                "code": 200,
+                "msg": "ok",
+                "query_id": "q_case_1",
+                "total_count": 1,
+                "total_page": 1,
+                "data": [
+                    {
+                        "id": "external_case_1",
+                        "title": "劳动争议工资支付类案",
+                        "content": "法院认为劳动者提交的考勤、聊天记录和工资流水可以相互印证。",
+                        "case_type": "民事",
+                        "cause": "劳动争议",
+                        "judgement_type": "民事判决",
+                        "judgement_date": "2024-01-15",
+                        "court": "深圳市中级人民法院",
+                        "case_number": "(2024)粤03民终1号",
+                        "level_of_trial": "二审",
+                        "publish_type_name": "裁判文书",
+                    }
+                ],
+            }
+
+        def search_laws(self, **kwargs):
+            self.law_calls.append(kwargs)
+            return {
+                "success": True,
+                "code": 200,
+                "msg": "ok",
+                "query_id": "q_law_1",
+                "total_count": 1,
+                "total_page": 1,
+                "data": [
+                    {
+                        "id": "external_law_1",
+                        "title": "中华人民共和国劳动合同法",
+                        "issued_no": "主席令第六十五号",
+                        "publish_date": "2012-12-28",
+                        "publisher_name": "全国人民代表大会常务委员会",
+                        "active_date": "2013-07-01",
+                        "timeliness_name": "现行有效",
+                        "level_name": "法律",
+                        "highlights": ["用人单位应当及时足额支付劳动报酬。"],
+                    }
+                ],
+            }
+
+    fake_search_client = FakeLegalSearchClient()
+    monkeypatch.setattr(main, "legal_search_client", lambda: fake_search_client)
+
     similar_task = client.post(
         "/api/cases/case_demo/tasks",
         json={
@@ -239,6 +342,8 @@ def test_task_center_executes_research_review_and_drafting(client: TestClient) -
     executed_similar = client.post(f"/api/cases/case_demo/tasks/{similar_task_id}/execute", json={})
     assert executed_similar.status_code == 200
     assert executed_similar.json()["status"] == "waiting_owner_review"
+    assert executed_similar.json()["metadata"]["api_provider"] == "delilegal"
+    assert fake_search_client.case_calls[0]["keyword"] == "拖欠工资和被迫离职"
 
     regulation_task = client.post(
         "/api/cases/case_demo/tasks",
@@ -250,7 +355,10 @@ def test_task_center_executes_research_review_and_drafting(client: TestClient) -
         },
     )
     regulation_task_id = regulation_task.json()["id"]
-    assert client.post(f"/api/cases/case_demo/tasks/{regulation_task_id}/execute", json={}).status_code == 200
+    executed_regulation = client.post(f"/api/cases/case_demo/tasks/{regulation_task_id}/execute", json={})
+    assert executed_regulation.status_code == 200
+    assert executed_regulation.json()["status"] == "waiting_owner_review"
+    assert fake_search_client.law_calls[0]["keywords"] == ["工资支付和劳动仲裁时效"]
 
     doc_resp = client.post(
         "/api/documents",
@@ -313,6 +421,45 @@ def test_task_center_executes_research_review_and_drafting(client: TestClient) -
     enriched = next(task for task in detail["tasks"] if task["id"] == similar_task_id)
     assert enriched["comments"]
     assert enriched["research_results"]
+    assert enriched["research_results"][0]["source"] == "法狗狗案例库"
+    assert enriched["research_results"][0]["external_id"] == "external_case_1"
+
+
+def test_research_task_blocks_when_delilegal_api_fails(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailingLegalSearchClient:
+        def search_cases(self, **kwargs):
+            return {
+                "success": False,
+                "code": 401,
+                "msg": "invalid credentials",
+                "query_id": None,
+                "total_count": 0,
+                "total_page": 0,
+                "data": [],
+            }
+
+    monkeypatch.setattr(main, "legal_search_client", lambda: FailingLegalSearchClient())
+    task = client.post(
+        "/api/cases/case_demo/tasks",
+        json={
+            "title": "检索失败类案",
+            "task_type": "similar_case_search",
+            "description": "劳动报酬",
+            "assigned_agent_role": "法律检索 Agent",
+        },
+    ).json()
+
+    executed = client.post(f"/api/cases/case_demo/tasks/{task['id']}/execute", json={})
+
+    assert executed.status_code == 200
+    payload = executed.json()
+    assert payload["status"] == "blocked"
+    assert "真实 API 调用失败" in payload["result_summary"]
+    assert payload["metadata"]["api_success"] is False
+    detail = client.get("/api/cases/case_demo").json()
+    run = next(item for item in detail["research_runs"] if item["task_id"] == task["id"])
+    assert run["status"] == "failed"
+    assert not [item for item in detail["research_results"] if item["task_id"] == task["id"]]
 
 
 def test_bind_existing_case_to_wechat_conversation(client: TestClient) -> None:

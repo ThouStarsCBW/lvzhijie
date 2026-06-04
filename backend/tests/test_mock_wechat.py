@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -37,6 +38,60 @@ def test_list_conversations_has_default_demo(client: TestClient) -> None:
     assert len(conversations) >= 1
     demo = next(c for c in conversations if c["id"] == "conv_demo")
     assert demo["contact"]["display_name"] == "演示客户"
+
+
+def test_default_mock_wechat_includes_family_consultation_samples(client: TestClient) -> None:
+    conversations = client.get("/api/mock-wechat/conversations").json()
+    by_id = {conversation["id"]: conversation for conversation in conversations}
+
+    assert by_id["conv_family_225"]["contact"]["display_name"] == "江家属"
+    assert by_id["conv_family_269"]["contact"]["display_name"] == "刘家属"
+    assert by_id["conv_family_272"]["contact"]["display_name"] == "艾家属"
+
+    for conversation_id in ("conv_family_225", "conv_family_269", "conv_family_272"):
+        messages = client.get(f"/api/mock-wechat/conversations/{conversation_id}/messages").json()
+        assert len(messages) >= 5
+        combined = "".join(message["content"] for message in messages)
+        assert "某" not in combined
+        assert ".pdf" not in combined
+
+
+def test_mock_store_backfills_family_samples_when_conversation_file_exists(tmp_path: Path) -> None:
+    root = tmp_path / "mock_wechat_backfill"
+    root.mkdir()
+    (root / "conversations.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "conv_existing",
+                    "openclaw_conversation_id": "mock_conv_existing",
+                    "contact_id": "contact_existing",
+                    "case_id": None,
+                    "status": "open",
+                    "auto_reply_source": "openclaw",
+                    "last_message_at": None,
+                    "unread_count": 0,
+                    "contact": {
+                        "id": "contact_existing",
+                        "openclaw_contact_id": "mock_contact_existing",
+                        "display_name": "既有客户",
+                        "remark": "",
+                        "avatar_url": None,
+                        "last_seen_at": None,
+                    },
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    store = MockWechatStore(root)
+
+    conversations = store.list_conversations()
+    assert any(conversation["id"] == "conv_existing" for conversation in conversations)
+    assert any(conversation["id"] == "conv_family_225" for conversation in conversations)
+    assert store.list_messages("conv_family_225")
 
 
 def test_create_conversation(client: TestClient) -> None:
