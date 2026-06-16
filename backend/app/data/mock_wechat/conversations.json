@@ -6,7 +6,7 @@
     "case_id": null,
     "status": "open",
     "auto_reply_source": "openclaw",
-    "last_message_at": "2026-06-03T01:27:21.602703+00:00",
+    "last_message_at": "2026-06-04T13:07:03.221759+00:00",
     "unread_count": 0,
     "contact": {
       "id": "contact_425f25087f25",
@@ -87,6 +87,24 @@
       "remark": "交通肇事刑事责任抗辩",
       "avatar_url": null,
       "last_seen_at": "2026-06-04T00:08:59.456852+00:00"
+    }
+  },
+  {
+    "id": "conv_acfafab8baaa",
+    "openclaw_conversation_id": "mock_conv_acfafab8baaa",
+    "contact_id": "contact_eb350fc33e85",
+    "case_id": "case_7989e61f8084",
+    "status": "open",
+    "auto_reply_source": "openclaw",
+    "last_message_at": "2026-06-04T13:09:25.122348+00:00",
+    "unread_count": 0,
+    "contact": {
+      "id": "contact_eb350fc33e85",
+      "openclaw_contact_id": "mock_contact_eb350fc33e85",
+      "display_name": "江家长咨询",
+      "remark": "校园霸凌",
+      "avatar_url": null,
+      "last_seen_at": "2026-06-04T13:10:03.124504+00:00"
     }
   }
 ]

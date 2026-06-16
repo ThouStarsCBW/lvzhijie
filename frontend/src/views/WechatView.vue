@@ -140,8 +140,8 @@ const visibleMessages = computed(() =>
   isPlaybackPlaying.value || playbackMessages.value.length ? playbackMessages.value : messages.value,
 );
 const playbackButtonLabel = computed(() => {
-  if (isPlaybackPlaying.value) return "演示中...";
-  return playbackFinished.value ? "重新播放模拟咨询" : "播放模拟咨询";
+  if (isPlaybackPlaying.value) return "";
+  return playbackFinished.value ? "" : "";
 });
 const filteredMessages = computed(() => {
   const text = query.value.trim().toLowerCase();
